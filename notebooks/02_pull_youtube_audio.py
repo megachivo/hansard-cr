@@ -99,10 +99,17 @@ USER_AGENT = (
 
 def _run_ytdlp(extra_args: list[str], url: str) -> subprocess.CompletedProcess:
     """Wrap yt-dlp call so stderr is surfaced on failure (otherwise serverless
-    swallows it as a bare CalledProcessError)."""
+    swallows it as a bare CalledProcessError).
+
+    `player_client=tv_embedded` bypasses YouTube's "Sign in to confirm you're
+    not a bot" gate that fires on datacenter IPs (Databricks serverless
+    egress). Other clients (`web_safari`, `mweb`, `ios`) hit format errors;
+    `android_creator` also works but is less stable across yt-dlp releases.
+    """
     cmd = [
         "yt-dlp",
         "--user-agent", USER_AGENT,
+        "--extractor-args", "youtube:player_client=tv_embedded",
         "--no-warnings",
         *extra_args,
         url,
