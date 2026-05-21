@@ -23,8 +23,8 @@ resources:
           default: "10"
         - name: limite_seg
           default: "3600"
-        - name: solo_plenario
-          default: "true"
+        - name: min_duracion_seg
+          default: "3600"
 
       tasks:
         - task_key: "pull_audio"
@@ -37,6 +37,6 @@ resources:
               channel_url: "{{job.parameters.channel_url}}"
               max_videos: "{{job.parameters.max_videos}}"
               limite_seg: "{{job.parameters.limite_seg}}"
-              solo_plenario: "{{job.parameters.solo_plenario}}"
+              min_duracion_seg: "{{job.parameters.min_duracion_seg}}"
 
       max_concurrent_runs: 1

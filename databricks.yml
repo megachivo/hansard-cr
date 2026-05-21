@@ -57,7 +57,7 @@ resources:
               channel_url: "https://www.youtube.com/@AsambleaCRC/videos"
               max_videos: "10"
               limite_seg: "3600"
-              solo_plenario: "true"
+              min_duracion_seg: "3600"
 
         - task_key: "transcribe_youtube"
           notebook_task:

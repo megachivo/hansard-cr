@@ -59,7 +59,7 @@ dbutils.widgets.text("volume", "raw_files")
 dbutils.widgets.text("channel_url", "https://www.youtube.com/@AsambleaCRC/videos")
 dbutils.widgets.text("max_videos", "10")
 dbutils.widgets.text("limite_seg", "3600")
-dbutils.widgets.text("solo_plenario", "true")
+dbutils.widgets.text("min_duracion_seg", "3600")
 
 CATALOG = dbutils.widgets.get("catalog")
 SCHEMA = dbutils.widgets.get("schema")
@@ -67,7 +67,7 @@ VOLUME = dbutils.widgets.get("volume")
 CHANNEL_URL = dbutils.widgets.get("channel_url")
 MAX_VIDEOS = int(dbutils.widgets.get("max_videos"))
 LIMITE_SEG = int(dbutils.widgets.get("limite_seg"))
-SOLO_PLENARIO = dbutils.widgets.get("solo_plenario").lower() == "true"
+MIN_DURACION_SEG = int(dbutils.widgets.get("min_duracion_seg"))
 
 VOLUME_ROOT = f"/Volumes/{CATALOG}/{SCHEMA}/{VOLUME}"
 AUDIO_DIR = f"{VOLUME_ROOT}/audio"
@@ -85,7 +85,8 @@ print(f"Tabla destino: {TABLE_YT}")
 # MAGIC ## Paso 1 — Descubrir IDs de video desde el canal
 # MAGIC
 # MAGIC Usamos `yt-dlp --flat-playlist` que no descarga audio, sólo lista entradas.
-# MAGIC Filtramos por título "Plenario Legislativo" para evitar comisiones, clips, etc.
+# MAGIC Filtramos por duración ≥ `MIN_DURACION_SEG` (default 1h) — las sesiones del
+# MAGIC plenario duran horas; comisiones, clips y resúmenes caen por debajo.
 
 # COMMAND ----------
 
@@ -166,9 +167,8 @@ def parsear_titulo(titulo: str) -> tuple[str | None, date | None]:
 candidatos = listar_videos_canal(CHANNEL_URL, MAX_VIDEOS)
 print(f"Candidatos del canal: {len(candidatos)}")
 
-if SOLO_PLENARIO:
-    candidatos = [c for c in candidatos if "plenario" in c["titulo"].lower()]
-    print(f"Tras filtrar 'plenario': {len(candidatos)}")
+candidatos = [c for c in candidatos if c["duration_seg"] >= MIN_DURACION_SEG]
+print(f"Tras filtrar duración ≥{MIN_DURACION_SEG}s: {len(candidatos)}")
 
 for c in candidatos[:10]:
     print(f"  {c['video_id']}  {c['titulo'][:80]}")
