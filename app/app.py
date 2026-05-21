@@ -6,12 +6,11 @@ conocimiento (chat flotante) sobre el Plenario de la Asamblea
 Legislativa de Costa Rica. Cada respuesta cita su fuente.
 
 Variables de entorno (configurar en app.yaml):
-- VECTOR_SEARCH_ENDPOINT
-- VECTOR_INDEX_NAME
-- LLM_ENDPOINT
-- CATALOG
-- SCHEMA_SILVER  (default "silver"; en dev mode el bundle lo prefija)
-- SCHEMA_GOLD    (default "gold")
+- AGENT_ENDPOINT_URL  (URL /invocations del Knowledge Assistant — el
+  agente del chat lateral llama directo a este endpoint)
+- VECTOR_SEARCH_ENDPOINT, VECTOR_INDEX_NAME  (sólo para la página "Buscar")
+- LLM_ENDPOINT  (usado por "Resumir esta sesión")
+- CATALOG, SCHEMA_SILVER, SCHEMA_GOLD  (queries SQL desde el App)
 - DATABRICKS_HTTP_PATH  (opcional — sólo para las páginas SQL)
 """
 
@@ -19,6 +18,7 @@ import os
 from html import escape
 
 import pandas as pd
+import requests
 import streamlit as st
 from databricks.sdk import WorkspaceClient
 from databricks.vector_search.client import VectorSearchClient
@@ -31,6 +31,13 @@ from openai import OpenAI
 ENDPOINT = os.environ.get("VECTOR_SEARCH_ENDPOINT", "hansard-cr-endpoint")
 INDEX = os.environ.get("VECTOR_INDEX_NAME", "hansard_cr.gold.intervenciones_idx")
 LLM_ENDPOINT = os.environ.get("LLM_ENDPOINT", "databricks-meta-llama-3-3-70b-instruct")
+# Knowledge Assistant (RAG-as-a-service) endpoint. Maneja retrieval +
+# generación internamente, así que el app sólo le manda los mensajes.
+AGENT_ENDPOINT_URL = os.environ.get(
+    "AGENT_ENDPOINT_URL",
+    "https://adb-7405613420378213.13.azuredatabricks.net/serving-endpoints/"
+    "ka-232fb7fd-endpoint/invocations",
+)
 CATALOG = os.environ.get("CATALOG", "hansard_cr")
 SCHEMA_SILVER = os.environ.get("SCHEMA_SILVER", "silver")
 SCHEMA_GOLD = os.environ.get("SCHEMA_GOLD", "gold")
@@ -440,38 +447,132 @@ def _construir_prompt_agente(
     return mensajes
 
 
+def _agent_auth_token() -> str | None:
+    """Pick the cleanest token available for calling the agent endpoint."""
+    try:
+        return WorkspaceClient().config.token
+    except Exception:
+        return os.environ.get("DATABRICKS_TOKEN")
+
+
+def _normalize_agent_sources(raw) -> list[dict]:
+    """Conformar fuentes del Knowledge Assistant al formato que esperan
+    nuestras tarjetas (`render_intervencion_card`)."""
+    if not raw:
+        return []
+    out = []
+    for s in raw:
+        if not isinstance(s, dict):
+            continue
+        meta = s.get("metadata") or s.get("doc_metadata") or {}
+
+        def pick(*keys):
+            for k in keys:
+                if s.get(k) not in (None, ""):
+                    return s.get(k)
+                if meta.get(k) not in (None, ""):
+                    return meta.get(k)
+            return None
+
+        texto = pick("texto", "page_content", "content", "text") or ""
+        out.append({
+            "diputado": pick("diputado") or "Sin identificar",
+            "fraccion": pick("fraccion"),
+            "fecha": pick("fecha") or "",
+            "session_id": pick("session_id") or "",
+            "video_url": pick("video_url"),
+            "start_sec": pick("start_sec"),
+            "pdf_url": pick("pdf_url"),
+            "fuente": pick("fuente") or "agent",
+            "texto": texto,
+        })
+    return out
+
+
+def _extract_agent_payload(data) -> tuple[str, list[dict]]:
+    """Robustly pull (answer, sources) from the endpoint response.
+
+    Acepta varias formas: OpenAI chat completions, MLflow predictions,
+    custom outputs con retrievals, etc."""
+    if not isinstance(data, dict):
+        return str(data), []
+
+    answer = ""
+    # OpenAI chat completions
+    choices = data.get("choices")
+    if isinstance(choices, list) and choices:
+        msg = choices[0].get("message") or {}
+        answer = msg.get("content") or ""
+
+    # MLflow dataframe_records / dataframe_split predictions
+    if not answer and "predictions" in data:
+        pred = data["predictions"]
+        if isinstance(pred, list) and pred:
+            pred = pred[0]
+        if isinstance(pred, dict):
+            answer = pred.get("content") or pred.get("output") or pred.get("text") or ""
+        elif isinstance(pred, str):
+            answer = pred
+
+    if not answer:
+        answer = data.get("output") or data.get("answer") or data.get("response") or ""
+    if not answer:
+        answer = str(data)
+
+    # Sources can live in several places
+    sources_raw = (
+        (data.get("custom_outputs") or {}).get("retrievals")
+        or (data.get("custom_outputs") or {}).get("sources")
+        or data.get("retrievals")
+        or data.get("sources")
+        or data.get("context")
+    )
+    return answer, _normalize_agent_sources(sources_raw)
+
+
 def run_agent_turn(user_input: str):
-    """Ejecuta una vuelta del agente: rewrite → retrieve → generate."""
+    """Una vuelta del agente: POST a la URL del Knowledge Assistant."""
     st.session_state.agent_messages.append(
         {"role": "user", "content": user_input}
     )
-    historial = st.session_state.agent_messages[:-1]
-    query = _reescribir_query(historial, user_input)
-    contexto = buscar(query, k=8)
 
-    if not contexto:
-        respuesta = (
-            "No encontré nada en el Plenario que responda a esa "
-            "pregunta. Probá reformularla o buscar por un tema más "
-            "específico (CCSS, jornada 4x3, seguridad, etc.)."
-        )
-        st.session_state.agent_messages.append(
-            {"role": "assistant", "content": respuesta, "sources": []}
-        )
+    messages = [
+        {"role": m["role"], "content": m["content"]}
+        for m in st.session_state.agent_messages[-12:]
+    ]
+
+    token = _agent_auth_token()
+    if not token:
+        st.session_state.agent_messages.append({
+            "role": "assistant",
+            "content": "⚠️ No hay credenciales para llamar al agente "
+                       "(falta DATABRICKS_TOKEN).",
+            "sources": [],
+        })
         return
 
-    mensajes = _construir_prompt_agente(historial, user_input, contexto)
     try:
-        resp = get_llm().chat.completions.create(
-            model=LLM_ENDPOINT, messages=mensajes,
-            max_tokens=900, temperature=0.2,
+        resp = requests.post(
+            AGENT_ENDPOINT_URL,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json={"messages": messages},
+            timeout=90,
         )
-        respuesta = resp.choices[0].message.content
+        resp.raise_for_status()
+        respuesta, sources = _extract_agent_payload(resp.json())
+    except requests.HTTPError as e:
+        body = e.response.text[:400] if e.response is not None else ""
+        respuesta = f"⚠️ El agente respondió con error: {e}\n\n```\n{body}\n```"
+        sources = []
     except Exception as e:
-        respuesta = f"⚠️ No pude generar respuesta: {e}"
+        respuesta = f"⚠️ No pude llamar al agente: {e}"
+        sources = []
 
     st.session_state.agent_messages.append(
-        {"role": "assistant", "content": respuesta, "sources": contexto}
+        {"role": "assistant", "content": respuesta, "sources": sources}
     )
 
 

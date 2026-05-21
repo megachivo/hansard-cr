@@ -30,8 +30,15 @@ env:
   - name: SCHEMA_GOLD
     value: "dev_jose_cisneros_gold"
 
+  # ----- Knowledge Assistant (agente RAG) --------------------------------
+  # URL del endpoint /invocations. El agente del chat lateral le manda
+  # los mensajes y recibe respuesta + fuentes (retrieval lo hace el
+  # endpoint internamente, no este App).
+  - name: AGENT_ENDPOINT_URL
+    value: "https://adb-7405613420378213.13.azuredatabricks.net/serving-endpoints/ka-232fb7fd-endpoint/invocations"
+
   # ----- LLM serving endpoint --------------------------------------------
-  # Cambiar a `databricks-claude-sonnet-4` si está disponible en tu región.
+  # Lo usa el botón "Resumir esta sesión" en la página de Sesión.
   - name: LLM_ENDPOINT
     valueFrom: "llm"
 
