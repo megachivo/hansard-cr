@@ -42,8 +42,13 @@ resources:
         - job_cluster_key: "small_cluster"
           new_cluster:
             spark_version: "15.4.x-scala2.12"
-            node_type_id: "i3.xlarge"  # ajustar a tu cloud
+            node_type_id: "Standard_DS3_v2"  # ajustar a tu cloud
             num_workers: 0
             data_security_mode: "SINGLE_USER"
+            spark_conf:
+              spark.databricks.cluster.profile: singleNode
+              spark.master: "local[*]"
+            custom_tags:
+              ResourceClass: SingleNode
 
       max_concurrent_runs: 1
