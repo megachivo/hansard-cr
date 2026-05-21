@@ -20,7 +20,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install yt-dlp --quiet
+# MAGIC %pip install -U yt-dlp --quiet
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -89,16 +89,40 @@ print(f"Tabla destino: {TABLE_YT}")
 
 # COMMAND ----------
 
-def listar_videos_canal(url: str, max_n: int) -> list[dict]:
-    """Devuelve [{video_id, titulo, duration_seg}] desde una URL de canal/playlist."""
+USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
+
+
+def _run_ytdlp(extra_args: list[str], url: str) -> subprocess.CompletedProcess:
+    """Wrap yt-dlp call so stderr is surfaced on failure (otherwise serverless
+    swallows it as a bare CalledProcessError)."""
     cmd = [
         "yt-dlp",
-        "--flat-playlist",
-        "--dump-json",
-        "--playlist-end", str(max_n),
+        "--user-agent", USER_AGENT,
+        "--no-warnings",
+        *extra_args,
         url,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"yt-dlp failed (exit {result.returncode})\n"
+            f"cmd: {' '.join(cmd)}\n"
+            f"stderr: {result.stderr.strip()}\n"
+            f"stdout: {result.stdout.strip()[:500]}"
+        )
+    return result
+
+
+def listar_videos_canal(url: str, max_n: int) -> list[dict]:
+    """Devuelve [{video_id, titulo, duration_seg}] desde una URL de canal/playlist."""
+    result = _run_ytdlp(
+        ["--flat-playlist", "--dump-json", "--playlist-end", str(max_n)],
+        url,
+    )
     entradas = []
     for line in result.stdout.strip().split("\n"):
         if not line:
@@ -180,17 +204,17 @@ def descargar_audio(video_id: str, dest_dir: str, limite_seg: int) -> dict:
     out_template = f"{dest_dir}/{video_id}.%(ext)s"
     audio_path = f"{dest_dir}/{video_id}.mp3"
 
-    cmd = [
-        "yt-dlp",
-        "-x",
-        "--audio-format", "mp3",
-        "--audio-quality", "5",
-        "--no-playlist",
-        "-o", out_template,
-        "--print-json",
+    result = _run_ytdlp(
+        [
+            "-x",
+            "--audio-format", "mp3",
+            "--audio-quality", "5",
+            "--no-playlist",
+            "-o", out_template,
+            "--print-json",
+        ],
         url,
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    )
     meta = json.loads(result.stdout.strip().split("\n")[-1])
 
     if meta.get("duration", 0) > limite_seg:
