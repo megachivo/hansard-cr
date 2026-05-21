@@ -60,6 +60,13 @@ dbutils.widgets.text("channel_url", "https://www.youtube.com/@AsambleaCRC/stream
 dbutils.widgets.text("max_videos", "10")
 dbutils.widgets.text("limite_seg", "3600")
 dbutils.widgets.text("min_duracion_seg", "3600")
+# Path inside a UC volume to a Netscape-format cookies.txt exported from a
+# logged-in browser. Required: YouTube gates the download API on datacenter
+# IPs (Databricks serverless egress) and `tv_embedded` alone isn't enough.
+# Export via the "Get cookies.txt LOCALLY" browser extension, then:
+#   databricks fs cp cookies.txt \
+#     dbfs:/Volumes/<cat>/<schema>/raw_files/youtube_cookies.txt
+dbutils.widgets.text("cookies_path", "")
 
 CATALOG = dbutils.widgets.get("catalog")
 SCHEMA = dbutils.widgets.get("schema")
@@ -68,6 +75,7 @@ CHANNEL_URL = dbutils.widgets.get("channel_url")
 MAX_VIDEOS = int(dbutils.widgets.get("max_videos"))
 LIMITE_SEG = int(dbutils.widgets.get("limite_seg"))
 MIN_DURACION_SEG = int(dbutils.widgets.get("min_duracion_seg"))
+COOKIES_PATH = dbutils.widgets.get("cookies_path").strip()
 
 VOLUME_ROOT = f"/Volumes/{CATALOG}/{SCHEMA}/{VOLUME}"
 AUDIO_DIR = f"{VOLUME_ROOT}/audio"
@@ -111,9 +119,10 @@ def _run_ytdlp(extra_args: list[str], url: str) -> subprocess.CompletedProcess:
         "--user-agent", USER_AGENT,
         "--extractor-args", "youtube:player_client=tv_embedded",
         "--no-warnings",
-        *extra_args,
-        url,
     ]
+    if COOKIES_PATH:
+        cmd += ["--cookies", COOKIES_PATH]
+    cmd += [*extra_args, url]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(

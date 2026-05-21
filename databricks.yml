@@ -58,6 +58,7 @@ resources:
               max_videos: "10"
               limite_seg: "3600"
               min_duracion_seg: "3600"
+              cookies_path: "/Volumes/${var.catalog}/${resources.schemas.bronze.name}/${resources.volumes.raw_files.name}/youtube_cookies.txt"
 
         - task_key: "transcribe_youtube"
           notebook_task:

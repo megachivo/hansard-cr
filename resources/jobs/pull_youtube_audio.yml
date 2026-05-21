@@ -25,6 +25,11 @@ resources:
           default: "3600"
         - name: min_duracion_seg
           default: "3600"
+        # cookies.txt (Netscape format) from a logged-in browser, uploaded
+        # to the UC volume. Needed to bypass YouTube's bot gate on Databricks
+        # serverless egress IPs.
+        - name: cookies_path
+          default: "/Volumes/${var.catalog}/${resources.schemas.bronze.name}/${resources.volumes.raw_files.name}/youtube_cookies.txt"
 
       tasks:
         - task_key: "pull_audio"
@@ -38,5 +43,6 @@ resources:
               max_videos: "{{job.parameters.max_videos}}"
               limite_seg: "{{job.parameters.limite_seg}}"
               min_duracion_seg: "{{job.parameters.min_duracion_seg}}"
+              cookies_path: "{{job.parameters.cookies_path}}"
 
       max_concurrent_runs: 1
