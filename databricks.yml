@@ -11,10 +11,10 @@ include:
 variables:
   catalog:
     description: "Unity Catalog para todos los datos"
-    default: "hansard_cr"
+    default: "josesraspoke"
   warehouse_id:
     description: "SQL Warehouse ID para queries del app"
-    default: ""  # llenar con tu warehouse
+    default: "1b37485f94b66e01"  # llenar con tu warehouse
 
 resources:
   schemas:
@@ -76,21 +76,6 @@ resources:
             - task_key: "transcribe_youtube"
             - task_key: "scrape_actas"
 
-      job_clusters:
-        - job_cluster_key: "small_cluster"
-          new_cluster:
-            spark_version: "15.4.x-scala2.12"
-            node_type_id: "i3.xlarge"  # ajustar a tu cloud
-            num_workers: 0
-            data_security_mode: "SINGLE_USER"
-
-        - job_cluster_key: "gpu_cluster"
-          new_cluster:
-            spark_version: "15.4.x-gpu-ml-scala2.12"
-            node_type_id: "g4dn.xlarge"  # T4 GPU, ajustar a tu cloud
-            num_workers: 0
-            data_security_mode: "SINGLE_USER"
-
       schedule:
         quartz_cron_expression: "0 0 7 * * ?"  # 7am todos los días
         timezone_id: "America/Costa_Rica"
@@ -101,10 +86,10 @@ resources:
       description: "Buscador del Plenario de la Asamblea Legislativa CR"
       source_code_path: "../app"
       resources:
-        - name: "vector-search"
-          vector_search_endpoint:
-            name: "hansard-cr-endpoint"
-            permission: "CAN_USE"
+        # - name: "vector-search"
+        #   vector_search_endpoint:
+        #     name: "hansard-cr-endpoint"
+        #     permission: "CAN_USE"
         - name: "llm"
           serving_endpoint:
             name: "databricks-meta-llama-3-3-70b-instruct"
@@ -120,5 +105,8 @@ targets:
   dev:
     mode: development
     default: true
+    workspace:
+      host: https://adb-7405613420378213.13.azuredatabricks.net/
+      root_path: ~/Shared/.bundle/${bundle.name}/${bundle.target}
   prod:
     mode: production
