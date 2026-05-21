@@ -11,10 +11,12 @@ resources:
       parameters:
         - name: catalog
           default: ${var.catalog}
+        # Refer to the deployed resource so dev-mode renaming
+        # (e.g. `bronze` → `dev_<user>_bronze`) propagates here.
         - name: schema
-          default: "bronze"
+          default: ${resources.schemas.bronze.name}
         - name: volume
-          default: "raw_files"
+          default: ${resources.volumes.raw_files.name}
         - name: channel_url
           default: "https://www.youtube.com/@AsambleaCRC/videos"
         - name: max_videos
