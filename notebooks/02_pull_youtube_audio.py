@@ -73,7 +73,9 @@ VOLUME_ROOT = f"/Volumes/{CATALOG}/{SCHEMA}/{VOLUME}"
 AUDIO_DIR = f"{VOLUME_ROOT}/audio"
 TABLE_YT = f"{CATALOG}.{SCHEMA}.youtube_raw"
 
-os.makedirs(AUDIO_DIR, exist_ok=True)
+# `os.makedirs` walks up to `/Volumes/{cat}/{schema}` and fails with EOPNOTSUPP
+# on serverless FUSE. `dbutils.fs.mkdirs` resolves through the UC abstraction.
+dbutils.fs.mkdirs(AUDIO_DIR)
 print(f"Audio dir: {AUDIO_DIR}")
 print(f"Tabla destino: {TABLE_YT}")
 
