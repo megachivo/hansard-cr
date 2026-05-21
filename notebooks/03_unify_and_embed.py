@@ -16,11 +16,26 @@
 
 from databricks.vector_search.client import VectorSearchClient
 
-CATALOG = "hansard_cr"
-ENDPOINT = "hansard-cr-endpoint"
-INDEX = f"{CATALOG}.gold.intervenciones_idx"
-SOURCE_TABLE = f"{CATALOG}.gold.intervenciones_unified"
-EMBEDDING_ENDPOINT = "databricks-gte-large-en"  # cambiar a multilingual-e5 si está disponible
+# Widgets para que el bundle pueda inyectar los nombres reales de los
+# schemas (en `mode: development` los schemas tienen prefijo de usuario).
+dbutils.widgets.text("catalog", "hansard_cr")
+dbutils.widgets.text("schema_silver", "silver")
+dbutils.widgets.text("schema_gold", "gold")
+dbutils.widgets.text("endpoint_name", "hansard-cr-endpoint")
+dbutils.widgets.text("embedding_endpoint", "databricks-gte-large-en")
+
+CATALOG = dbutils.widgets.get("catalog")
+SCHEMA_SILVER = dbutils.widgets.get("schema_silver")
+SCHEMA_GOLD = dbutils.widgets.get("schema_gold")
+ENDPOINT = dbutils.widgets.get("endpoint_name")
+EMBEDDING_ENDPOINT = dbutils.widgets.get("embedding_endpoint")
+
+UNIFIED_TABLE = f"{CATALOG}.{SCHEMA_GOLD}.intervenciones_unified"
+SILVER_TABLE = f"{CATALOG}.{SCHEMA_SILVER}.intervenciones"
+INDEX = f"{CATALOG}.{SCHEMA_GOLD}.intervenciones_idx"
+SOURCE_TABLE = UNIFIED_TABLE
+print(f"catalog={CATALOG} silver={SCHEMA_SILVER} gold={SCHEMA_GOLD}")
+print(f"source={SOURCE_TABLE} index={INDEX} endpoint={ENDPOINT}")
 
 # COMMAND ----------
 
@@ -29,35 +44,35 @@ EMBEDDING_ENDPOINT = "databricks-gte-large-en"  # cambiar a multilingual-e5 si e
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC CREATE TABLE IF NOT EXISTS hansard_cr.gold.intervenciones_unified (
-# MAGIC   intervencion_id STRING NOT NULL,
-# MAGIC   session_id STRING,
-# MAGIC   fecha DATE,
-# MAGIC   fuente STRING,
-# MAGIC   diputado STRING,
-# MAGIC   fraccion STRING,
-# MAGIC   texto STRING,
-# MAGIC   orden INT,
-# MAGIC   start_sec INT,
-# MAGIC   video_url STRING,
-# MAGIC   pdf_url STRING,
-# MAGIC   CONSTRAINT pk_intervenciones PRIMARY KEY (intervencion_id)
-# MAGIC )
-# MAGIC TBLPROPERTIES (delta.enableChangeDataFeed = true);
+spark.sql(f"""
+CREATE TABLE IF NOT EXISTS {UNIFIED_TABLE} (
+  intervencion_id STRING NOT NULL,
+  session_id STRING,
+  fecha DATE,
+  fuente STRING,
+  diputado STRING,
+  fraccion STRING,
+  texto STRING,
+  orden INT,
+  start_sec INT,
+  video_url STRING,
+  pdf_url STRING,
+  CONSTRAINT pk_intervenciones PRIMARY KEY (intervencion_id)
+)
+TBLPROPERTIES (delta.enableChangeDataFeed = true)
+""")
 
 # COMMAND ----------
 
 # Poblar desde silver
-silver_qualified = f"{CATALOG}.silver.intervenciones"
-silver_exists = spark.catalog.tableExists(silver_qualified)
+silver_exists = spark.catalog.tableExists(SILVER_TABLE)
 silver_count = (
-    spark.table(silver_qualified).count() if silver_exists else 0
+    spark.table(SILVER_TABLE).count() if silver_exists else 0
 )
 
 if silver_count > 0:
     spark.sql(f"""
-    INSERT OVERWRITE {CATALOG}.gold.intervenciones_unified
+    INSERT OVERWRITE {UNIFIED_TABLE}
     SELECT
       intervencion_id,
       session_id,
@@ -70,10 +85,10 @@ if silver_count > 0:
       start_sec,
       video_url,
       pdf_url
-    FROM {silver_qualified}
+    FROM {SILVER_TABLE}
     WHERE LENGTH(texto) > 50
     """)
-    print(f"Cargado desde {silver_qualified} ({silver_count} filas en silver).")
+    print(f"Cargado desde {SILVER_TABLE} ({silver_count} filas en silver).")
 else:
     # ------------------------------------------------------------------
     # Placeholder seed: deja la tabla utilizable por el App aun antes
@@ -166,13 +181,14 @@ else:
     (seed_df.write
         .mode("overwrite")
         .option("overwriteSchema", "true")
-        .saveAsTable(f"{CATALOG}.gold.intervenciones_unified"))
+        .saveAsTable(UNIFIED_TABLE))
     print(
         f"Silver vacío o ausente: poblado {len(seed)} filas de placeholder "
-        "para que el Vector Search y el App tengan algo que mostrar."
+        "en {UNIFIED_TABLE} para que el Vector Search y el App tengan algo "
+        "que mostrar."
     )
 
-print(spark.sql(f"SELECT COUNT(*) FROM {CATALOG}.gold.intervenciones_unified").collect()[0][0])
+print(spark.sql(f"SELECT COUNT(*) FROM {UNIFIED_TABLE}").collect()[0][0])
 
 # COMMAND ----------
 

@@ -10,6 +10,8 @@ Variables de entorno (configurar en app.yaml):
 - VECTOR_INDEX_NAME
 - LLM_ENDPOINT
 - CATALOG
+- SCHEMA_SILVER  (default "silver"; en dev mode el bundle lo prefija)
+- SCHEMA_GOLD    (default "gold")
 - DATABRICKS_HTTP_PATH  (opcional — sólo para las páginas SQL)
 """
 
@@ -30,6 +32,12 @@ ENDPOINT = os.environ.get("VECTOR_SEARCH_ENDPOINT", "hansard-cr-endpoint")
 INDEX = os.environ.get("VECTOR_INDEX_NAME", "hansard_cr.gold.intervenciones_idx")
 LLM_ENDPOINT = os.environ.get("LLM_ENDPOINT", "databricks-meta-llama-3-3-70b-instruct")
 CATALOG = os.environ.get("CATALOG", "hansard_cr")
+# En `mode: development` los schemas vienen prefijados; en prod son
+# simplemente "silver" y "gold".
+SCHEMA_SILVER = os.environ.get("SCHEMA_SILVER", "silver")
+SCHEMA_GOLD = os.environ.get("SCHEMA_GOLD", "gold")
+SILVER_INTERVENCIONES = f"{CATALOG}.{SCHEMA_SILVER}.intervenciones"
+GOLD_UNIFIED = f"{CATALOG}.{SCHEMA_GOLD}.intervenciones_unified"
 
 st.set_page_config(
     page_title="Hansard CR",
@@ -223,8 +231,14 @@ def get_llm():
 @st.cache_resource(show_spinner=False)
 def get_spark():
     """SQL warehouse connection. Devuelve None si no está configurado."""
-    http_path = os.environ.get("DATABRICKS_HTTP_PATH")
     host = os.environ.get("DATABRICKS_HOST")
+    http_path = os.environ.get("DATABRICKS_HTTP_PATH")
+    # En Databricks Apps `valueFrom` sobre un sql_warehouse expone el ID,
+    # no el http_path. Lo derivamos.
+    if not http_path:
+        warehouse_id = os.environ.get("DATABRICKS_WAREHOUSE_ID")
+        if warehouse_id:
+            http_path = f"/sql/1.0/warehouses/{warehouse_id}"
     if not http_path or not host:
         return None
     try:
@@ -343,9 +357,9 @@ def render_hero():
     metrics = sql_df(
         f"""
         SELECT
-          (SELECT COUNT(DISTINCT session_id) FROM {CATALOG}.silver.intervenciones) AS sesiones,
-          (SELECT COUNT(*) FROM {CATALOG}.silver.intervenciones) AS intervenciones,
-          (SELECT COUNT(DISTINCT diputado) FROM {CATALOG}.silver.intervenciones
+          (SELECT COUNT(DISTINCT session_id) FROM {SILVER_INTERVENCIONES}) AS sesiones,
+          (SELECT COUNT(*) FROM {SILVER_INTERVENCIONES}) AS intervenciones,
+          (SELECT COUNT(DISTINCT diputado) FROM {SILVER_INTERVENCIONES}
               WHERE diputado IS NOT NULL) AS diputados
         """
     )
@@ -560,7 +574,7 @@ def page_sesion():
     sesiones = sql_df(
         f"""
         SELECT DISTINCT session_id, fecha, video_url, fuente
-        FROM {CATALOG}.silver.intervenciones
+        FROM {SILVER_INTERVENCIONES}
         ORDER BY fecha DESC LIMIT 50
         """
     )
@@ -591,7 +605,7 @@ def page_sesion():
         if st.button("🤖 Resumir esta sesión", use_container_width=True):
             contenido = sql_df(
                 f"""
-                SELECT diputado, texto FROM {CATALOG}.silver.intervenciones
+                SELECT diputado, texto FROM {SILVER_INTERVENCIONES}
                 WHERE session_id = '{sel}' LIMIT 30
                 """
             )
@@ -620,7 +634,7 @@ def page_sesion():
         f"""
         SELECT diputado, fraccion, texto, start_sec, fecha, session_id,
                video_url, fuente
-        FROM {CATALOG}.silver.intervenciones
+        FROM {SILVER_INTERVENCIONES}
         WHERE session_id = '{sel}' ORDER BY orden LIMIT 100
         """
     )
@@ -642,7 +656,7 @@ def page_diputado():
         SELECT diputado, ANY_VALUE(fraccion) AS fraccion,
                COUNT(*) AS intervenciones,
                SUM(LENGTH(texto)) AS chars_total
-        FROM {CATALOG}.silver.intervenciones
+        FROM {SILVER_INTERVENCIONES}
         WHERE diputado IS NOT NULL AND diputado NOT LIKE '%sin identificar%'
         GROUP BY diputado HAVING COUNT(*) > 1
         ORDER BY intervenciones DESC
@@ -671,7 +685,7 @@ def page_diputado():
         f"""
         SELECT fecha, session_id, texto, diputado, fraccion, start_sec,
                video_url, fuente
-        FROM {CATALOG}.silver.intervenciones
+        FROM {SILVER_INTERVENCIONES}
         WHERE diputado = '{dip_sel}'
         ORDER BY fecha DESC LIMIT 5
         """

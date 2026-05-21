@@ -15,6 +15,9 @@ variables:
   warehouse_id:
     description: "SQL Warehouse ID para queries del app"
     default: "1b37485f94b66e01"  # llenar con tu warehouse
+  vector_search_endpoint:
+    description: "Nombre del Vector Search endpoint (compartido entre notebook y app)"
+    default: "hansard-cr-endpoint"
 
 resources:
   schemas:
@@ -68,6 +71,12 @@ resources:
         - task_key: "unify_and_embed"
           notebook_task:
             notebook_path: "./notebooks/03_unify_and_embed.py"
+            base_parameters:
+              catalog: ${var.catalog}
+              schema_silver: ${resources.schemas.silver.name}
+              schema_gold: ${resources.schemas.gold.name}
+              endpoint_name: ${var.vector_search_endpoint}
+              embedding_endpoint: "databricks-gte-large-en"
           depends_on:
             - task_key: "transcribe_youtube"
             - task_key: "scrape_actas"
@@ -82,10 +91,11 @@ resources:
       description: "Buscador del Plenario de la Asamblea Legislativa CR"
       source_code_path: "./app"
       resources:
-        # - name: "vector-search"
-        #   vector_search_endpoint:
-        #     name: "hansard-cr-endpoint"
-        #     permission: "CAN_USE"
+        # NOTA: Databricks Apps no expone `vector_search_endpoint` como
+        # resource binding. Después de crear el endpoint (job
+        # `vector_search_bootstrap`), concedele CAN_USE a la SP del App:
+        #   databricks vector-search-endpoints update-permissions \
+        #     ${var.vector_search_endpoint} --json '{"access_control_list":[{"service_principal_name":"<app-sp>","permission_level":"CAN_USE"}]}'
         - name: "llm"
           serving_endpoint:
             name: "databricks-meta-llama-3-3-70b-instruct"
