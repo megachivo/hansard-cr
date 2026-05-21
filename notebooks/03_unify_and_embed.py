@@ -49,23 +49,128 @@ EMBEDDING_ENDPOINT = "databricks-gte-large-en"  # cambiar a multilingual-e5 si e
 # COMMAND ----------
 
 # Poblar desde silver
-spark.sql(f"""
-INSERT OVERWRITE {CATALOG}.gold.intervenciones_unified
-SELECT
-  intervencion_id,
-  session_id,
-  fecha,
-  fuente,
-  diputado,
-  fraccion,
-  texto,
-  orden,
-  start_sec,
-  video_url,
-  pdf_url
-FROM {CATALOG}.silver.intervenciones
-WHERE LENGTH(texto) > 50
-""")
+silver_qualified = f"{CATALOG}.silver.intervenciones"
+silver_exists = spark.catalog.tableExists(silver_qualified)
+silver_count = (
+    spark.table(silver_qualified).count() if silver_exists else 0
+)
+
+if silver_count > 0:
+    spark.sql(f"""
+    INSERT OVERWRITE {CATALOG}.gold.intervenciones_unified
+    SELECT
+      intervencion_id,
+      session_id,
+      fecha,
+      fuente,
+      diputado,
+      fraccion,
+      texto,
+      orden,
+      start_sec,
+      video_url,
+      pdf_url
+    FROM {silver_qualified}
+    WHERE LENGTH(texto) > 50
+    """)
+    print(f"Cargado desde {silver_qualified} ({silver_count} filas en silver).")
+else:
+    # ------------------------------------------------------------------
+    # Placeholder seed: deja la tabla utilizable por el App aun antes
+    # de que terminen los pipelines de scraping/transcripción. Estas
+    # filas se sobreescriben en la próxima corrida con datos reales.
+    # ------------------------------------------------------------------
+    from datetime import date
+
+    seed = [
+        (
+            "seed-001", "ord-001-2026", date(2026, 5, 14), "video",
+            "Diputada Pilar Cisneros", "PPSD",
+            "La situación de la CCSS es insostenible. Los tiempos de espera "
+            "para una cita de especialidad superan los seis meses en varias "
+            "regiones del país. Necesitamos una reforma estructural ya.",
+            1, 320,
+            "https://www.youtube.com/watch?v=demo01", None,
+        ),
+        (
+            "seed-002", "ord-001-2026", date(2026, 5, 14), "video",
+            "Diputado Antonio Ortega", "Frente Amplio",
+            "Coincido en que la CCSS necesita más recursos, pero la solución "
+            "no es desfinanciarla con exoneraciones. Aquí proponemos un "
+            "fortalecimiento del primer nivel de atención.",
+            2, 540,
+            "https://www.youtube.com/watch?v=demo01", None,
+        ),
+        (
+            "seed-003", "ord-001-2026", date(2026, 5, 14), "acta",
+            "Diputado Daniel Vargas", "Liberación Nacional",
+            "Sobre seguridad ciudadana, los homicidios crecieron 38% en dos "
+            "años. La estrategia actual no está funcionando. Proponemos "
+            "duplicar las unidades de Fuerza Pública en cantones críticos.",
+            3, None,
+            None, "https://www.asamblea.go.cr/actas/2026-05-14.pdf",
+        ),
+        (
+            "seed-004", "ord-002-2026", date(2026, 5, 15), "video",
+            "Diputada Sofía Guillén", "Frente Amplio",
+            "La jornada laboral de cuatro días por tres no debe imponerse "
+            "sobre el trabajador. Esta propuesta, en su forma actual, "
+            "vulnera derechos consolidados desde el código de 1943.",
+            1, 180,
+            "https://www.youtube.com/watch?v=demo02", None,
+        ),
+        (
+            "seed-005", "ord-002-2026", date(2026, 5, 15), "video",
+            "Diputado Eli Feinzaig", "Liberal Progresista",
+            "La jornada 4x3 es una oportunidad para sectores específicos "
+            "como turismo y manufactura. Con salvaguardas adecuadas, puede "
+            "convivir con el código laboral existente.",
+            2, 360,
+            "https://www.youtube.com/watch?v=demo02", None,
+        ),
+        (
+            "seed-006", "ord-002-2026", date(2026, 5, 15), "video",
+            "Diputada Pilar Cisneros", "PPSD",
+            "Sobre seguridad, lo que necesitamos no son más policías sino "
+            "policías mejor entrenados, con inteligencia, y con fiscales "
+            "que persigan los delitos en lugar de archivarlos.",
+            3, 720,
+            "https://www.youtube.com/watch?v=demo02", None,
+        ),
+        (
+            "seed-007", "ord-003-2026", date(2026, 5, 16), "acta",
+            "Diputado Antonio Ortega", "Frente Amplio",
+            "El presupuesto extraordinario destinado al MEP es insuficiente. "
+            "La caída en pruebas estandarizadas requiere inversión en "
+            "infraestructura, formación docente y conectividad rural.",
+            1, None,
+            None, "https://www.asamblea.go.cr/actas/2026-05-16.pdf",
+        ),
+        (
+            "seed-008", "ord-003-2026", date(2026, 5, 16), "video",
+            "Diputado Daniel Vargas", "Liberación Nacional",
+            "Educación pública es nuestra mejor herramienta contra la "
+            "desigualdad. Apoyamos el presupuesto extraordinario, pero pedimos "
+            "auditoría obligatoria de los recursos del FEES.",
+            2, 240,
+            "https://www.youtube.com/watch?v=demo03", None,
+        ),
+    ]
+
+    schema = (
+        "intervencion_id STRING, session_id STRING, fecha DATE, fuente STRING, "
+        "diputado STRING, fraccion STRING, texto STRING, orden INT, "
+        "start_sec INT, video_url STRING, pdf_url STRING"
+    )
+    seed_df = spark.createDataFrame(seed, schema=schema)
+    (seed_df.write
+        .mode("overwrite")
+        .option("overwriteSchema", "true")
+        .saveAsTable(f"{CATALOG}.gold.intervenciones_unified"))
+    print(
+        f"Silver vacío o ausente: poblado {len(seed)} filas de placeholder "
+        "para que el Vector Search y el App tengan algo que mostrar."
+    )
 
 print(spark.sql(f"SELECT COUNT(*) FROM {CATALOG}.gold.intervenciones_unified").collect()[0][0])
 

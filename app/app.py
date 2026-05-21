@@ -230,63 +230,195 @@ with tabs[2]:
             with st.expander(f"{u['fecha']} — {u['session_id']}"):
                 st.write(u["texto"])
 
-# --- Tab 4: Preguntar (RAG con citas) ---------------------------------------
+# --- Tab 4: Preguntar (Agente de conocimiento, multi-turno con citas) -------
 with tabs[3]:
-    st.subheader("💬 Preguntale al Plenario")
-    st.caption("Respondemos con texto real del Plenario. Cada respuesta cita su fuente.")
-
-    pregunta = st.text_area(
-        "Tu pregunta",
-        placeholder="ej. ¿Qué se ha dicho sobre la jornada 4x3?",
-        height=100,
+    st.subheader("💬 Agente del Plenario")
+    st.caption(
+        "Chat multi-turno con citas obligatorias. Cada respuesta se construye "
+        "desde texto real recuperado del Plenario."
     )
 
-    if st.button("Preguntar", type="primary") and pregunta:
-        with st.spinner("Buscando contexto..."):
-            contexto = buscar(pregunta, k=8)
+    # ------------------------------------------------------------------
+    # Estado de la conversación
+    # ------------------------------------------------------------------
+    if "agent_messages" not in st.session_state:
+        st.session_state.agent_messages = []  # [{role, content, sources?}]
 
-        if not contexto:
-            st.error("No encontré contexto suficiente.")
-        else:
-            # Construir prompt con citas numeradas
-            ctx_texto = "\n\n".join(
-                f"[{i+1}] {c['diputado']} ({c['fecha']}, sesión {c['session_id']}):\n{c['texto']}"
-                for i, c in enumerate(contexto)
-            )
-            prompt = f"""Eres un analista del Plenario de la Asamblea Legislativa de Costa Rica.
-Responde la pregunta usando SOLO la información del contexto.
-Cita las fuentes con [n] donde n es el número de la cita.
-Si el contexto no alcanza, dilo explícitamente y no inventes.
+    col_clear, col_sug = st.columns([1, 4])
+    with col_clear:
+        if st.button("🧹 Limpiar chat", use_container_width=True):
+            st.session_state.agent_messages = []
+            st.rerun()
+    with col_sug:
+        st.caption(
+            "Sugerencias: *¿Qué se dijo sobre la CCSS?* · "
+            "*Comparame las posturas sobre seguridad* · "
+            "*Resumime la última sesión*"
+        )
 
-CONTEXTO:
-{ctx_texto}
-
-PREGUNTA: {pregunta}
-
-RESPUESTA (con citas [n] obligatorias):"""
-
-            with st.spinner("Pensando..."):
-                resp = get_llm().chat.completions.create(
-                    model=LLM_ENDPOINT,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=800,
-                    temperature=0.2,
-                )
-            respuesta = resp.choices[0].message.content
-            st.markdown("### Respuesta")
-            st.write(respuesta)
-
-            st.markdown("### Fuentes")
-            for i, c in enumerate(contexto):
-                with st.expander(f"[{i+1}] {c['diputado']} — {c['fecha']}"):
-                    st.write(c["texto"])
-                    cols = st.columns(2)
-                    if c.get("video_url") and c.get("start_sec") is not None:
-                        cols[0].markdown(
-                            f"[▶ Video]({c['video_url']}&t={int(c['start_sec'])})"
+    # ------------------------------------------------------------------
+    # Render del histórico
+    # ------------------------------------------------------------------
+    for msg in st.session_state.agent_messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            if msg.get("sources"):
+                with st.expander(f"📚 Fuentes ({len(msg['sources'])})"):
+                    for i, c in enumerate(msg["sources"]):
+                        st.markdown(
+                            f"**[{i+1}] {c['diputado']}**"
+                            + (f" *({c['fraccion']})*" if c.get("fraccion") else "")
+                            + f" — {c['fecha']} — sesión `{c['session_id']}`"
                         )
-                    if c.get("pdf_url"):
-                        cols[1].markdown(f"[📄 Acta]({c['pdf_url']})")
+                        st.write(c["texto"])
+                        link_cols = st.columns(2)
+                        if c.get("video_url") and c.get("start_sec") is not None:
+                            link_cols[0].markdown(
+                                f"[▶ Video min {int(c['start_sec']) // 60}]"
+                                f"({c['video_url']}&t={int(c['start_sec'])})"
+                            )
+                        if c.get("pdf_url"):
+                            link_cols[1].markdown(f"[📄 Acta]({c['pdf_url']})")
+                        st.divider()
+
+    # ------------------------------------------------------------------
+    # Helpers del agente
+    # ------------------------------------------------------------------
+    def _reescribir_query(historial: list[dict], pregunta: str) -> str:
+        """Convierte una pregunta de seguimiento + historial en una query
+        de búsqueda independiente (standalone). Si es la primera pregunta,
+        la devuelve tal cual."""
+        if not historial:
+            return pregunta
+        previo = "\n".join(
+            f"{m['role']}: {m['content'][:400]}" for m in historial[-4:]
+        )
+        prompt = (
+            "Dado el historial de chat y una nueva pregunta de seguimiento, "
+            "reescribí la nueva pregunta como una consulta autocontenida en "
+            "español, lista para búsqueda semántica. No respondas la pregunta; "
+            "solo devolvé la consulta. Si la pregunta ya es autocontenida, "
+            "devolvela igual.\n\n"
+            f"HISTORIAL:\n{previo}\n\n"
+            f"NUEVA PREGUNTA: {pregunta}\n\nCONSULTA:"
+        )
+        try:
+            resp = get_llm().chat.completions.create(
+                model=LLM_ENDPOINT,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=120,
+                temperature=0.0,
+            )
+            rewritten = resp.choices[0].message.content.strip().strip('"')
+            return rewritten or pregunta
+        except Exception:
+            return pregunta
+
+    def _construir_prompt_agente(
+        historial: list[dict], pregunta: str, contexto: list[dict]
+    ) -> list[dict]:
+        ctx_texto = "\n\n".join(
+            f"[{i+1}] {c['diputado']}"
+            + (f" ({c['fraccion']})" if c.get("fraccion") else "")
+            + f" — {c['fecha']} — sesión {c['session_id']}:\n{c['texto']}"
+            for i, c in enumerate(contexto)
+        )
+        system = (
+            "Sos un analista del Plenario de la Asamblea Legislativa de Costa "
+            "Rica. Respondés solo con base en el CONTEXTO provisto. "
+            "Toda afirmación factual debe ir acompañada de citas en formato "
+            "[n] referidas al número de fuente. Si el contexto no alcanza, "
+            "decilo explícitamente y no inventes. Tono neutral, claro y "
+            "conciso. Si la pregunta pide comparar posturas, estructurá la "
+            "respuesta por diputado o por fracción."
+        )
+        mensajes = [{"role": "system", "content": system}]
+        for m in historial[-6:]:  # ventana corta para no inflar el prompt
+            mensajes.append({"role": m["role"], "content": m["content"]})
+        mensajes.append(
+            {
+                "role": "user",
+                "content": (
+                    f"CONTEXTO RECUPERADO:\n{ctx_texto}\n\n"
+                    f"PREGUNTA: {pregunta}\n\n"
+                    "Respondé con citas [n] obligatorias."
+                ),
+            }
+        )
+        return mensajes
+
+    # ------------------------------------------------------------------
+    # Input del usuario
+    # ------------------------------------------------------------------
+    user_input = st.chat_input("Preguntale al Plenario...")
+    if user_input:
+        # 1. Pintar el mensaje del usuario inmediatamente
+        st.session_state.agent_messages.append(
+            {"role": "user", "content": user_input}
+        )
+        with st.chat_message("user"):
+            st.markdown(user_input)
+
+        # 2. Pipeline del agente: rewrite → retrieve → generate
+        with st.chat_message("assistant"):
+            historial_previo = st.session_state.agent_messages[:-1]
+
+            with st.spinner("Reformulando la consulta..."):
+                query = _reescribir_query(historial_previo, user_input)
+            if query != user_input:
+                st.caption(f"🔍 Buscando: *{query}*")
+
+            with st.spinner("Buscando en el Plenario..."):
+                contexto = buscar(query, k=8)
+
+            if not contexto:
+                respuesta = (
+                    "No encontré nada en el Plenario que responda a esa "
+                    "pregunta. Probá reformularla o buscar por un tema más "
+                    "específico (CCSS, jornada 4x3, seguridad, etc.)."
+                )
+                st.markdown(respuesta)
+                st.session_state.agent_messages.append(
+                    {"role": "assistant", "content": respuesta, "sources": []}
+                )
+            else:
+                mensajes = _construir_prompt_agente(
+                    historial_previo, user_input, contexto
+                )
+                with st.spinner("Pensando..."):
+                    resp = get_llm().chat.completions.create(
+                        model=LLM_ENDPOINT,
+                        messages=mensajes,
+                        max_tokens=900,
+                        temperature=0.2,
+                    )
+                respuesta = resp.choices[0].message.content
+                st.markdown(respuesta)
+                with st.expander(f"📚 Fuentes ({len(contexto)})"):
+                    for i, c in enumerate(contexto):
+                        st.markdown(
+                            f"**[{i+1}] {c['diputado']}**"
+                            + (f" *({c['fraccion']})*" if c.get("fraccion") else "")
+                            + f" — {c['fecha']} — sesión `{c['session_id']}`"
+                        )
+                        st.write(c["texto"])
+                        link_cols = st.columns(2)
+                        if c.get("video_url") and c.get("start_sec") is not None:
+                            link_cols[0].markdown(
+                                f"[▶ Video min {int(c['start_sec']) // 60}]"
+                                f"({c['video_url']}&t={int(c['start_sec'])})"
+                            )
+                        if c.get("pdf_url"):
+                            link_cols[1].markdown(f"[📄 Acta]({c['pdf_url']})")
+                        st.divider()
+
+                st.session_state.agent_messages.append(
+                    {
+                        "role": "assistant",
+                        "content": respuesta,
+                        "sources": contexto,
+                    }
+                )
 
 # ---------------------------------------------------------------------------
 # Footer
