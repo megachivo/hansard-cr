@@ -1,0 +1,39 @@
+# Standalone job: transcribir videos en bronze.youtube_raw vía el endpoint
+# `hansard-whisper`. Pensado para correr después de
+# `register_uploaded_audio` cuando los mp3s vienen del workaround manual
+# (sin pasar por `pull_youtube_audio`, que YouTube bloquea desde IPs de
+# datacenter).
+
+resources:
+  jobs:
+    transcribe_youtube:
+      name: "Hansard CR — Transcribe YouTube (endpoint)"
+      description: "Llama al endpoint hansard-whisper y puebla silver.transcripciones / silver.intervenciones"
+
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema_bronze
+          default: ${resources.schemas.bronze.name}
+        - name: schema_silver
+          default: ${resources.schemas.silver.name}
+        - name: endpoint_name
+          default: "hansard-whisper"
+        - name: chunk_seg
+          default: "30"
+        - name: ventana_intervencion_seg
+          default: "180"
+
+      tasks:
+        - task_key: "transcribe"
+          notebook_task:
+            notebook_path: "../../notebooks/02_transcribe_youtube.py"
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema_bronze: "{{job.parameters.schema_bronze}}"
+              schema_silver: "{{job.parameters.schema_silver}}"
+              endpoint_name: "{{job.parameters.endpoint_name}}"
+              chunk_seg: "{{job.parameters.chunk_seg}}"
+              ventana_intervencion_seg: "{{job.parameters.ventana_intervencion_seg}}"
+
+      max_concurrent_runs: 1
