@@ -54,7 +54,7 @@ resources:
               catalog: ${var.catalog}
               schema: ${resources.schemas.bronze.name}
               volume: ${resources.volumes.raw_files.name}
-              channel_url: "https://www.youtube.com/@AsambleaCRC/videos"
+              channel_url: "https://www.youtube.com/@AsambleaCRC/streams"
               max_videos: "10"
               limite_seg: "3600"
               min_duracion_seg: "3600"

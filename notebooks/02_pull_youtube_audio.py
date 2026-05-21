@@ -56,7 +56,7 @@ from pyspark.sql.types import (
 dbutils.widgets.text("catalog", "hansard_cr")
 dbutils.widgets.text("schema", "bronze")
 dbutils.widgets.text("volume", "raw_files")
-dbutils.widgets.text("channel_url", "https://www.youtube.com/@AsambleaCRC/videos")
+dbutils.widgets.text("channel_url", "https://www.youtube.com/@AsambleaCRC/streams")
 dbutils.widgets.text("max_videos", "10")
 dbutils.widgets.text("limite_seg", "3600")
 dbutils.widgets.text("min_duracion_seg", "3600")

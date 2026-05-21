@@ -19,7 +19,8 @@
 |---------|-----|
 | Canal | `https://www.youtube.com/@AsambleaCRC` |
 | Playlists (verificar manualmente al empezar) | `https://www.youtube.com/@AsambleaCRC/playlists` |
-| Videos recientes | `https://www.youtube.com/@AsambleaCRC/videos` |
+| Videos recientes | `https://www.youtube.com/@AsambleaCRC/videos` (clips cortos de noticias — NO contiene sesiones) |
+| Sesiones del plenario (live streams) | `https://www.youtube.com/@AsambleaCRC/streams` ← usar esta en el pipeline |
 
 ### Ejemplos de URLs de sesiones (para usar como semilla en demo)
 - `https://www.youtube.com/watch?v=6RvmcG2CzqQ` — Plenario ordinaria #96, 03 febrero 2025

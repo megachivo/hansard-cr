@@ -18,7 +18,7 @@ resources:
         - name: volume
           default: ${resources.volumes.raw_files.name}
         - name: channel_url
-          default: "https://www.youtube.com/@AsambleaCRC/videos"
+          default: "https://www.youtube.com/@AsambleaCRC/streams"
         - name: max_videos
           default: "10"
         - name: limite_seg
