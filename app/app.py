@@ -23,7 +23,6 @@ import streamlit as st
 from databricks.sdk import WorkspaceClient
 from databricks.vector_search.client import VectorSearchClient
 from openai import OpenAI
-from streamlit_float import float_init
 
 # ---------------------------------------------------------------------------
 # Configuración
@@ -44,7 +43,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-float_init(theme=False)
 
 # ---------------------------------------------------------------------------
 # Paleta CR
@@ -205,10 +203,12 @@ st.markdown(
         margin: 0 1px; vertical-align: super;
       }}
 
-      /* Sidebar branding */
+      /* Sidebar — más ancho para que la conversación con el agente quepa */
       [data-testid="stSidebar"] {{
         background: #F8FAFC;
         border-right: 1px solid #E5E7EB;
+        min-width: 360px !important;
+        max-width: 420px !important;
       }}
       [data-testid="stSidebar"] h2 {{ font-size: 1.1rem; }}
 
@@ -479,11 +479,13 @@ def run_agent_turn(user_input: str):
 # Floating agent widget
 # ---------------------------------------------------------------------------
 
-def render_floating_agent():
-    """Render the agent as a floating panel at bottom-left.
+def render_sidebar_agent():
+    """Render the agent inside the left sidebar.
 
-    Collapsed: a single 'Preguntar al Agente' pill button.
-    Expanded:  a chat panel with history + input.
+    Closed: just a 'Abrir agente' button. The user can browse the main
+    page without distraction.
+    Open: chat history (scrollable) + input form. Stays in the sidebar
+    so the main page content remains fully visible to the right.
     """
     if "agent_messages" not in st.session_state:
         st.session_state.agent_messages = []
@@ -491,81 +493,66 @@ def render_floating_agent():
         st.session_state.chat_open = False
 
     chat_open = st.session_state.chat_open
-    container = st.container()
 
     if not chat_open:
-        with container:
-            st.markdown('<div class="agent-bubble">', unsafe_allow_html=True)
-            if st.button("💬 Preguntar al Agente",
-                         key="open_agent", use_container_width=True):
-                st.session_state.chat_open = True
-                st.rerun()
-            st.markdown("</div>", unsafe_allow_html=True)
-        container.float(
-            "bottom: 22px; left: 22px; width: 220px; z-index: 9999;"
-        )
+        if st.button("💬 Abrir agente",
+                     key="open_agent", use_container_width=True,
+                     type="primary"):
+            st.session_state.chat_open = True
+            st.rerun()
         return
 
-    with container:
-        st.markdown('<div class="agent-panel">', unsafe_allow_html=True)
-
-        # Header
-        head_col1, head_col2, head_col3 = st.columns([5, 1, 1])
-        head_col1.markdown(
-            f'<div class="title">💬 Agente del Plenario</div>',
-            unsafe_allow_html=True,
-        )
-        if head_col2.button("🧹", key="clear_agent",
-                            help="Limpiar conversación"):
-            st.session_state.agent_messages = []
-            st.rerun()
-        if head_col3.button("✕", key="close_agent", help="Cerrar"):
-            st.session_state.chat_open = False
-            st.rerun()
-
-        # Empty state
-        if not st.session_state.agent_messages:
-            st.caption(
-                "Preguntá lo que se ha dicho en el Plenario. Las respuestas "
-                "siempre citan su fuente."
-            )
-
-        # Pending input (from sugerencia chip elsewhere)
-        pending = st.session_state.pop("pending_input", None)
-
-        # History (scrollable)
-        history = st.container(height=320)
-        with history:
-            for msg in st.session_state.agent_messages:
-                with st.chat_message(msg["role"]):
-                    st.markdown(msg["content"])
-                    if msg.get("sources"):
-                        with st.expander(f"📚 {len(msg['sources'])} fuentes"):
-                            for i, c in enumerate(msg["sources"]):
-                                render_intervencion_card(
-                                    c, cite_n=i + 1, compact=True
-                                )
-
-        # Input form
-        with st.form("agent_form", clear_on_submit=True):
-            user_input = st.text_input(
-                "Pregunta",
-                placeholder="Preguntale al Plenario...",
-                label_visibility="collapsed",
-            )
-            submitted = st.form_submit_button("Enviar →", use_container_width=True)
-
-        st.markdown("</div>", unsafe_allow_html=True)
-
-        text = pending or (user_input if submitted else None)
-        if text:
-            with st.spinner("Pensando..."):
-                run_agent_turn(text)
-            st.rerun()
-
-    container.float(
-        "bottom: 22px; left: 22px; width: 440px; z-index: 9999;"
+    # Header
+    head_col1, head_col2, head_col3 = st.columns([4, 1, 1])
+    head_col1.markdown(
+        f'<div style="color:{CR_BLUE};font-weight:700;'
+        'font-family:Source Serif Pro,Georgia,serif;'
+        'padding-top:6px;">💬 Agente</div>',
+        unsafe_allow_html=True,
     )
+    if head_col2.button("🧹", key="clear_agent", help="Limpiar conversación"):
+        st.session_state.agent_messages = []
+        st.rerun()
+    if head_col3.button("✕", key="close_agent", help="Cerrar"):
+        st.session_state.chat_open = False
+        st.rerun()
+
+    if not st.session_state.agent_messages:
+        st.caption(
+            "Preguntá lo que se ha dicho en el Plenario. "
+            "Cada respuesta cita su fuente."
+        )
+
+    # Pending input from sugerencia chips
+    pending = st.session_state.pop("pending_input", None)
+
+    # History (scrollable)
+    history = st.container(height=360)
+    with history:
+        for msg in st.session_state.agent_messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+                if msg.get("sources"):
+                    with st.expander(f"📚 {len(msg['sources'])} fuentes"):
+                        for i, c in enumerate(msg["sources"]):
+                            render_intervencion_card(
+                                c, cite_n=i + 1, compact=True
+                            )
+
+    # Input form
+    with st.form("agent_form", clear_on_submit=True):
+        user_input = st.text_input(
+            "Pregunta",
+            placeholder="Preguntale al Plenario...",
+            label_visibility="collapsed",
+        )
+        submitted = st.form_submit_button("Enviar →", use_container_width=True)
+
+    text = pending or (user_input if submitted else None)
+    if text:
+        with st.spinner("Pensando..."):
+            run_agent_turn(text)
+        st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -853,8 +840,7 @@ with st.sidebar:
     )
 
     st.divider()
-    st.caption("**El agente vive en la esquina inferior izquierda 💬**")
-    st.caption("Está disponible en cualquier página.")
+    render_sidebar_agent()
 
     st.divider()
     st.caption("**Fuentes**")
@@ -870,6 +856,3 @@ with st.sidebar:
 
 render_hero()
 PAGES[page]()
-
-# Floating agent — siempre al final para que quede on top
-render_floating_agent()
