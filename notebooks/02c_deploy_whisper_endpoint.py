@@ -50,6 +50,7 @@ else:
     w.serving_endpoints.create(
         name=ENDPOINT,
         config=EndpointCoreConfigInput(
+            name=ENDPOINT,
             served_entities=[
                 ServedEntityInput(
                     entity_name=MODEL_FULL_NAME,
