@@ -1,0 +1,34 @@
+# Job dedicado: registrar en `bronze.youtube_raw` los mp3s subidos
+# manualmente al UC Volume (workaround del bot-gate de YouTube en
+# serverless egress).
+#
+# Pre-requisito: subir mp3s + manifest.csv al volume con
+# `databricks fs cp local_audio/* dbfs:/Volumes/<cat>/<schema>/raw_files/audio/`
+
+resources:
+  jobs:
+    register_uploaded_audio:
+      name: "Hansard CR — Register Uploaded Audio"
+      description: "Lee manifest.csv del UC Volume y appendea a bronze.youtube_raw"
+
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${resources.schemas.bronze.name}
+        - name: volume
+          default: ${resources.volumes.raw_files.name}
+        - name: manifest_filename
+          default: "manifest.csv"
+
+      tasks:
+        - task_key: "register_audio"
+          notebook_task:
+            notebook_path: "../../notebooks/02b_register_uploaded_audio.py"
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              volume: "{{job.parameters.volume}}"
+              manifest_filename: "{{job.parameters.manifest_filename}}"
+
+      max_concurrent_runs: 1
