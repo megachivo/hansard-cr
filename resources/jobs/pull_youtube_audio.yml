@@ -1,0 +1,49 @@
+# Job dedicado: descarga de audio del canal de YouTube → UC Volume.
+# Independiente de `daily_pipeline` para poder ejecutarlo a demanda
+# (backfills, pruebas, ingesta puntual de una sesión específica).
+
+resources:
+  jobs:
+    pull_youtube_audio:
+      name: "Hansard CR — Pull YouTube Audio"
+      description: "Descarga mp3 del canal @AsambleaCRC al UC Volume bronze.raw_files/audio"
+
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: "bronze"
+        - name: volume
+          default: "raw_files"
+        - name: channel_url
+          default: "https://www.youtube.com/@AsambleaCRC/videos"
+        - name: max_videos
+          default: "10"
+        - name: limite_seg
+          default: "3600"
+        - name: solo_plenario
+          default: "true"
+
+      tasks:
+        - task_key: "pull_audio"
+          notebook_task:
+            notebook_path: "../../notebooks/02_pull_youtube_audio"
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              volume: "{{job.parameters.volume}}"
+              channel_url: "{{job.parameters.channel_url}}"
+              max_videos: "{{job.parameters.max_videos}}"
+              limite_seg: "{{job.parameters.limite_seg}}"
+              solo_plenario: "{{job.parameters.solo_plenario}}"
+          job_cluster_key: "small_cluster"
+
+      job_clusters:
+        - job_cluster_key: "small_cluster"
+          new_cluster:
+            spark_version: "15.4.x-scala2.12"
+            node_type_id: "i3.xlarge"  # ajustar a tu cloud
+            num_workers: 0
+            data_security_mode: "SINGLE_USER"
+
+      max_concurrent_runs: 1

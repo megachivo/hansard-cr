@@ -1,0 +1,52 @@
+name: Deploy Databricks bundle
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "databricks.yml"
+      - "resources/**"
+      - "notebooks/**"
+      - "app/**"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Bundle target"
+        required: true
+        default: "dev"
+        type: choice
+        options: [dev, prod]
+      job_to_run:
+        description: "Job a ejecutar después del deploy (none = sólo deploy)"
+        required: true
+        default: "pull_youtube_audio"
+        type: choice
+        options: [none, pull_youtube_audio, daily_pipeline]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+      TARGET: ${{ inputs.target || 'dev' }}
+      JOB_TO_RUN: ${{ inputs.job_to_run || 'pull_youtube_audio' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Databricks CLI
+        uses: databricks/setup-cli@main
+
+      - name: Validate bundle
+        run: databricks bundle validate --target "$TARGET"
+
+      - name: Deploy bundle (schemas, volumes, jobs, app)
+        run: databricks bundle deploy --target "$TARGET"
+
+      - name: Summary
+        run: databricks bundle summary --target "$TARGET"
+
+      - name: Run job
+        if: env.JOB_TO_RUN != 'none'
+        run: databricks bundle run "$JOB_TO_RUN" --target "$TARGET"

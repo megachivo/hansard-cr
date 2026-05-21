@@ -5,6 +5,9 @@
 bundle:
   name: hansard-cr
 
+include:
+  - resources/jobs/*.yml
+
 variables:
   catalog:
     description: "Unity Catalog para todos los datos"
@@ -14,6 +17,28 @@ variables:
     default: ""  # llenar con tu warehouse
 
 resources:
+  schemas:
+    bronze:
+      catalog_name: ${var.catalog}
+      name: bronze
+      comment: "Raw landing zone: PDFs scrapeados, audio de YouTube, metadata cruda"
+    silver:
+      catalog_name: ${var.catalog}
+      name: silver
+      comment: "Datos parseados: intervenciones, transcripciones segmentadas"
+    gold:
+      catalog_name: ${var.catalog}
+      name: gold
+      comment: "Curated para Vector Search + dashboard"
+
+  volumes:
+    raw_files:
+      catalog_name: ${var.catalog}
+      schema_name: ${resources.schemas.bronze.name}
+      name: raw_files
+      volume_type: MANAGED
+      comment: "PDFs de actas y mp3 de YouTube. Subpaths: /actas, /audio"
+
   jobs:
     daily_pipeline:
       name: "Hansard CR — Daily Pipeline"
@@ -23,12 +48,25 @@ resources:
             notebook_path: "../notebooks/01_scrape_actas"
           job_cluster_key: "small_cluster"
 
+        - task_key: "pull_youtube_audio"
+          notebook_task:
+            notebook_path: "../notebooks/02_pull_youtube_audio"
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: "bronze"
+              volume: "raw_files"
+              channel_url: "https://www.youtube.com/@AsambleaCRC/videos"
+              max_videos: "10"
+              limite_seg: "3600"
+              solo_plenario: "true"
+          job_cluster_key: "small_cluster"
+
         - task_key: "transcribe_youtube"
           notebook_task:
             notebook_path: "../notebooks/02_transcribe_youtube"
           job_cluster_key: "gpu_cluster"
           depends_on:
-            - task_key: "scrape_actas"
+            - task_key: "pull_youtube_audio"
 
         - task_key: "unify_and_embed"
           notebook_task:
@@ -36,6 +74,7 @@ resources:
           job_cluster_key: "small_cluster"
           depends_on:
             - task_key: "transcribe_youtube"
+            - task_key: "scrape_actas"
 
       job_clusters:
         - job_cluster_key: "small_cluster"
@@ -76,12 +115,10 @@ resources:
             permission: "CAN_USE"
 
 targets:
+  # `workspace.host` se toma de la variable de entorno DATABRICKS_HOST
+  # (en CI viene del secreto del repo; localmente del perfil de ~/.databrickscfg).
   dev:
     mode: development
     default: true
-    workspace:
-      host: https://your-workspace.cloud.databricks.com  # editar
   prod:
     mode: production
-    workspace:
-      host: https://your-workspace.cloud.databricks.com
