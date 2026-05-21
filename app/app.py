@@ -8,6 +8,7 @@ Legislativa de Costa Rica. Cada respuesta cita su fuente.
 Variables de entorno (configurar en app.yaml):
 - AGENT_ENDPOINT_URL  (URL /invocations del Knowledge Assistant — el
   agente del chat lateral llama directo a este endpoint)
+- GENIE_SPACE_ID      (ID del Genie space — alimenta la página 🧞 Genie)
 - VECTOR_SEARCH_ENDPOINT, VECTOR_INDEX_NAME  (sólo para la página "Buscar")
 - LLM_ENDPOINT  (usado por "Resumir esta sesión")
 - CATALOG, SCHEMA_SILVER, SCHEMA_GOLD  (queries SQL desde el App)
@@ -15,6 +16,7 @@ Variables de entorno (configurar en app.yaml):
 """
 
 import os
+import time
 from html import escape
 
 import pandas as pd
@@ -37,6 +39,11 @@ AGENT_ENDPOINT_URL = os.environ.get(
     "AGENT_ENDPOINT_URL",
     "https://adb-7405613420378213.13.azuredatabricks.net/serving-endpoints/"
     "ka-232fb7fd-endpoint/invocations",
+)
+# Genie space — natural language → SQL → tabla. La página `🧞 Genie`
+# usa la REST API `/api/2.0/genie/spaces/{id}` contra este workspace.
+GENIE_SPACE_ID = os.environ.get(
+    "GENIE_SPACE_ID", "01f1556679db11f9a9289ee027895887"
 )
 CATALOG = os.environ.get("CATALOG", "hansard_cr")
 SCHEMA_SILVER = os.environ.get("SCHEMA_SILVER", "silver")
@@ -911,6 +918,277 @@ def page_diputado():
 
 
 # ---------------------------------------------------------------------------
+# Genie — natural language → SQL → tabla
+# ---------------------------------------------------------------------------
+
+_GENIE_TERMINAL_STATES = {
+    "COMPLETED", "FAILED", "CANCELLED", "QUERY_RESULT_EXPIRED",
+}
+
+
+def _genie_base_url() -> str | None:
+    host = (os.environ.get("DATABRICKS_HOST") or "").rstrip("/")
+    if not host:
+        return None
+    if not host.startswith("http"):
+        host = "https://" + host
+    return f"{host}/api/2.0/genie/spaces/{GENIE_SPACE_ID}"
+
+
+def _genie_headers() -> dict | None:
+    token = _agent_auth_token()
+    if not token:
+        return None
+    return {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+
+def _genie_start_conversation(question: str) -> dict:
+    """POST /start-conversation — devuelve {conversation_id, message_id, ...}."""
+    base = _genie_base_url()
+    r = requests.post(
+        f"{base}/start-conversation",
+        headers=_genie_headers(),
+        json={"content": question},
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def _genie_followup(conversation_id: str, question: str) -> dict:
+    base = _genie_base_url()
+    r = requests.post(
+        f"{base}/conversations/{conversation_id}/messages",
+        headers=_genie_headers(),
+        json={"content": question},
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def _genie_get_message(conversation_id: str, message_id: str) -> dict:
+    base = _genie_base_url()
+    r = requests.get(
+        f"{base}/conversations/{conversation_id}/messages/{message_id}",
+        headers=_genie_headers(),
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def _genie_query_result(
+    conversation_id: str, message_id: str, attachment_id: str
+) -> dict:
+    """GET query-result/{attachment_id} — devuelve statement_response."""
+    base = _genie_base_url()
+    r = requests.get(
+        f"{base}/conversations/{conversation_id}/messages/{message_id}"
+        f"/query-result/{attachment_id}",
+        headers=_genie_headers(),
+        timeout=60,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def _genie_result_to_df(result: dict) -> pd.DataFrame | None:
+    """Convertir el `statement_response` de Genie a un DataFrame."""
+    sr = result.get("statement_response") or result
+    if not isinstance(sr, dict):
+        return None
+    manifest = sr.get("manifest") or {}
+    schema = manifest.get("schema") or {}
+    cols = [c.get("name") for c in schema.get("columns", [])]
+    data = (sr.get("result") or {}).get("data_array") or []
+    if cols and data:
+        return pd.DataFrame(data, columns=cols)
+    if data:
+        return pd.DataFrame(data)
+    return None
+
+
+def _genie_ask(question: str, conversation_id: str | None,
+               max_wait_s: int = 90) -> dict:
+    """Disparar pregunta, esperar a estado terminal, devolver el mensaje."""
+    if conversation_id:
+        initial = _genie_followup(conversation_id, question)
+    else:
+        initial = _genie_start_conversation(question)
+
+    conv_id = initial.get("conversation_id") or conversation_id
+    msg_id = (
+        initial.get("message_id")
+        or initial.get("id")
+        or (initial.get("message") or {}).get("id")
+    )
+    if not conv_id or not msg_id:
+        raise RuntimeError(
+            f"Respuesta de Genie sin conversation/message id: {initial}"
+        )
+
+    start = time.time()
+    while time.time() - start < max_wait_s:
+        msg = _genie_get_message(conv_id, msg_id)
+        status = (msg.get("status") or "").upper()
+        if status in _GENIE_TERMINAL_STATES:
+            msg["_conversation_id"] = conv_id
+            msg["_message_id"] = msg_id
+            return msg
+        time.sleep(1.5)
+
+    return {
+        "status": "TIMEOUT",
+        "_conversation_id": conv_id,
+        "_message_id": msg_id,
+    }
+
+
+def page_genie():
+    st.markdown("## 🧞 Genie")
+    st.caption(
+        "Preguntas en lenguaje natural sobre los datos. Genie genera el "
+        "SQL, lo ejecuta sobre Unity Catalog y devuelve la tabla."
+    )
+    st.caption(f"Space: `{GENIE_SPACE_ID}`")
+
+    if "genie_messages" not in st.session_state:
+        st.session_state.genie_messages = []
+    if "genie_conv_id" not in st.session_state:
+        st.session_state.genie_conv_id = None
+
+    col_clear, col_sug = st.columns([1, 4])
+    if col_clear.button("🧹 Limpiar", use_container_width=True,
+                        key="clear_genie"):
+        st.session_state.genie_messages = []
+        st.session_state.genie_conv_id = None
+        st.rerun()
+    col_sug.caption(
+        "Ejemplos: *¿Cuántas intervenciones hubo por fracción en mayo?* · "
+        "*¿Quién tiene más intervenciones?* · *Top 5 sesiones por duración*"
+    )
+
+    # Render history
+    for entry in st.session_state.genie_messages:
+        with st.chat_message(entry["role"]):
+            if entry.get("content"):
+                st.markdown(entry["content"])
+            for a in entry.get("attachments", []):
+                if a.get("description"):
+                    st.markdown(f"_{a['description']}_")
+                if a.get("sql"):
+                    with st.expander("SQL generado", expanded=False):
+                        st.code(a["sql"], language="sql")
+                if a.get("data") is not None:
+                    st.dataframe(a["data"], use_container_width=True)
+
+    user_q = st.chat_input("Preguntale a Genie...")
+    if not user_q:
+        return
+
+    if not _genie_base_url() or not _genie_headers():
+        st.error(
+            "Genie no está configurado: faltan DATABRICKS_HOST o "
+            "DATABRICKS_TOKEN en el entorno del App."
+        )
+        return
+
+    st.session_state.genie_messages.append(
+        {"role": "user", "content": user_q}
+    )
+    with st.chat_message("user"):
+        st.markdown(user_q)
+
+    with st.chat_message("assistant"):
+        try:
+            with st.spinner("Genie está pensando..."):
+                msg = _genie_ask(user_q, st.session_state.genie_conv_id)
+        except requests.HTTPError as e:
+            body = e.response.text[:600] if e.response is not None else ""
+            st.error(f"HTTP {e.response.status_code if e.response else '?'}: {body}")
+            st.session_state.genie_messages.append({
+                "role": "assistant",
+                "content": f"⚠️ Genie devolvió error: {e}",
+                "attachments": [],
+            })
+            return
+        except Exception as e:
+            st.error(str(e))
+            st.session_state.genie_messages.append({
+                "role": "assistant",
+                "content": f"⚠️ Error: {e}",
+                "attachments": [],
+            })
+            return
+
+        status = (msg.get("status") or "").upper()
+        st.session_state.genie_conv_id = msg.get("_conversation_id")
+        if status != "COMPLETED":
+            err = msg.get("error") or msg.get("error_message") or status
+            st.error(f"Status: {status}. {err}")
+            st.session_state.genie_messages.append({
+                "role": "assistant",
+                "content": f"⚠️ Genie no completó: {err}",
+                "attachments": [],
+            })
+            return
+
+        # Pull text + query attachments
+        entry = {"role": "assistant",
+                 "content": msg.get("content") or "",
+                 "attachments": []}
+        msg_id = msg.get("_message_id") or msg.get("id")
+
+        for a in msg.get("attachments") or []:
+            attachment_id = (
+                a.get("attachment_id") or a.get("id")
+            )
+            if "query" in a and a["query"]:
+                q = a["query"]
+                sql = q.get("query") or q.get("statement") or ""
+                desc = q.get("description") or ""
+                data_df = None
+                if attachment_id:
+                    try:
+                        with st.spinner("Trayendo la tabla..."):
+                            result = _genie_query_result(
+                                st.session_state.genie_conv_id,
+                                msg_id, attachment_id,
+                            )
+                        data_df = _genie_result_to_df(result)
+                    except Exception as e:
+                        st.warning(f"No pude traer la tabla: {e}")
+                entry["attachments"].append({
+                    "sql": sql, "description": desc, "data": data_df,
+                })
+            elif "text" in a and a["text"]:
+                txt = a["text"].get("content") or ""
+                if txt:
+                    entry["content"] = (
+                        f"{entry['content']}\n\n{txt}" if entry["content"]
+                        else txt
+                    )
+
+        # Render the response we just composed
+        if entry["content"]:
+            st.markdown(entry["content"])
+        for a in entry["attachments"]:
+            if a.get("description"):
+                st.markdown(f"_{a['description']}_")
+            if a.get("sql"):
+                with st.expander("SQL generado", expanded=False):
+                    st.code(a["sql"], language="sql")
+            if a.get("data") is not None:
+                st.dataframe(a["data"], use_container_width=True)
+
+        st.session_state.genie_messages.append(entry)
+
+
+# ---------------------------------------------------------------------------
 # Sidebar nav
 # ---------------------------------------------------------------------------
 
@@ -919,6 +1197,7 @@ PAGES = {
     "🔎 Buscar": page_buscar,
     "📺 Sesión": page_sesion,
     "👤 Diputado": page_diputado,
+    "🧞 Genie": page_genie,
 }
 
 with st.sidebar:

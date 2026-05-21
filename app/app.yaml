@@ -37,6 +37,12 @@ env:
   - name: AGENT_ENDPOINT_URL
     value: "https://adb-7405613420378213.13.azuredatabricks.net/serving-endpoints/ka-232fb7fd-endpoint/invocations"
 
+  # ----- Genie space (NL → SQL → tabla) ----------------------------------
+  # ID extraído de https://<workspace>/genie/rooms/{GENIE_SPACE_ID}
+  # La página "🧞 Genie" llama a /api/2.0/genie/spaces/{id}/...
+  - name: GENIE_SPACE_ID
+    value: "01f1556679db11f9a9289ee027895887"
+
   # ----- LLM serving endpoint --------------------------------------------
   # Lo usa el botón "Resumir esta sesión" en la página de Sesión.
   - name: LLM_ENDPOINT
