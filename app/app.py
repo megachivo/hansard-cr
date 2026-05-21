@@ -2,8 +2,8 @@
 Hansard CR — Databricks App
 ============================
 Buscador semántico, exploración por sesión/diputado y agente de
-conocimiento con citas obligatorias sobre el Plenario de la Asamblea
-Legislativa de Costa Rica.
+conocimiento (chat flotante) sobre el Plenario de la Asamblea
+Legislativa de Costa Rica. Cada respuesta cita su fuente.
 
 Variables de entorno (configurar en app.yaml):
 - VECTOR_SEARCH_ENDPOINT
@@ -23,6 +23,7 @@ import streamlit as st
 from databricks.sdk import WorkspaceClient
 from databricks.vector_search.client import VectorSearchClient
 from openai import OpenAI
+from streamlit_float import float_init
 
 # ---------------------------------------------------------------------------
 # Configuración
@@ -32,8 +33,6 @@ ENDPOINT = os.environ.get("VECTOR_SEARCH_ENDPOINT", "hansard-cr-endpoint")
 INDEX = os.environ.get("VECTOR_INDEX_NAME", "hansard_cr.gold.intervenciones_idx")
 LLM_ENDPOINT = os.environ.get("LLM_ENDPOINT", "databricks-meta-llama-3-3-70b-instruct")
 CATALOG = os.environ.get("CATALOG", "hansard_cr")
-# En `mode: development` los schemas vienen prefijados; en prod son
-# simplemente "silver" y "gold".
 SCHEMA_SILVER = os.environ.get("SCHEMA_SILVER", "silver")
 SCHEMA_GOLD = os.environ.get("SCHEMA_GOLD", "gold")
 SILVER_INTERVENCIONES = f"{CATALOG}.{SCHEMA_SILVER}.intervenciones"
@@ -45,28 +44,22 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+float_init(theme=False)
 
 # ---------------------------------------------------------------------------
-# Diseño civic CR — paleta basada en la bandera
+# Paleta CR
 # ---------------------------------------------------------------------------
 
 CR_BLUE = "#002B7F"
 CR_RED = "#CE1126"
 
-# Colores aproximados por fracción
 PARTY_COLORS = {
-    "PLN": "#2E7D32",
-    "Liberación Nacional": "#2E7D32",
-    "PUSC": "#1565C0",
-    "Unidad Social Cristiana": "#1565C0",
-    "FA": "#C62828",
-    "Frente Amplio": "#C62828",
-    "PLP": "#EF6C00",
-    "Liberal Progresista": "#EF6C00",
-    "PPSD": "#F9A825",
-    "Pueblo Soberano": "#F9A825",
-    "NR": "#1976D2",
-    "Nueva República": "#1976D2",
+    "PLN": "#2E7D32", "Liberación Nacional": "#2E7D32",
+    "PUSC": "#1565C0", "Unidad Social Cristiana": "#1565C0",
+    "FA": "#C62828", "Frente Amplio": "#C62828",
+    "PLP": "#EF6C00", "Liberal Progresista": "#EF6C00",
+    "PPSD": "#F9A825", "Pueblo Soberano": "#F9A825",
+    "NR": "#1976D2", "Nueva República": "#1976D2",
 }
 
 
@@ -86,10 +79,22 @@ def party_badge_html(fraccion: str | None) -> str:
     )
 
 
+def avatar_html(name: str | None, fraccion: str | None) -> str:
+    parts = [p for p in (name or "").replace("Diputado", "").replace("Diputada", "").split() if p]
+    initials = "".join(p[0] for p in parts[:2]).upper() or "?"
+    color = party_color(fraccion)
+    return (
+        f'<div class="avatar" style="background:{color}">{escape(initials)}</div>'
+    )
+
+
+# ---------------------------------------------------------------------------
+# CSS
+# ---------------------------------------------------------------------------
+
 st.markdown(
     f"""
     <style>
-      /* Tipografía */
       html, body, [class*="css"] {{
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
       }}
@@ -101,40 +106,66 @@ st.markdown(
 
       /* Hero */
       .hero {{
-        padding: 1.5rem 1.75rem 1.25rem;
-        border-radius: 14px;
-        background: linear-gradient(135deg, {CR_BLUE} 0%, #06408a 60%, {CR_RED} 130%);
+        padding: 1.6rem 1.9rem 1.3rem;
+        border-radius: 16px;
+        background:
+          radial-gradient(circle at 90% -20%, rgba(255,255,255,0.18), transparent 50%),
+          linear-gradient(135deg, {CR_BLUE} 0%, #06408a 55%, {CR_RED} 140%);
         color: white;
         margin-bottom: 1.25rem;
-        box-shadow: 0 6px 24px rgba(0,43,127,0.18);
+        box-shadow: 0 10px 30px rgba(0,43,127,0.20);
+        position: relative;
+        overflow: hidden;
+      }}
+      .hero::after {{
+        content: "🏛️";
+        position: absolute;
+        right: -8px; bottom: -36px;
+        font-size: 8rem; opacity: 0.07;
+        pointer-events: none;
       }}
       .hero h1 {{
-        color: white;
-        margin: 0 0 0.25rem;
-        font-size: 2.1rem;
-        letter-spacing: -0.02em;
+        color: white; margin: 0 0 0.25rem;
+        font-size: 2.2rem; letter-spacing: -0.02em;
       }}
-      .hero .tag {{
-        opacity: 0.92;
-        font-size: 1.0rem;
-      }}
+      .hero .tag {{ opacity: 0.94; font-size: 1.02rem; max-width: 720px; }}
       .hero .flag-bar {{
-        display: flex; gap: 4px; height: 6px;
-        margin-top: 0.9rem; border-radius: 4px; overflow: hidden;
+        display: flex; gap: 3px; height: 6px;
+        margin-top: 1rem; border-radius: 4px; overflow: hidden;
       }}
       .hero .flag-bar > div {{ flex: 1; }}
 
-      /* Chips de fracción */
+      /* Suggestion cards */
+      .sugcard {{
+        background: white;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 14px 16px;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        height: 100%;
+      }}
+      .sugcard:hover {{
+        border-color: {CR_BLUE};
+        transform: translateY(-2px);
+        box-shadow: 0 8px 20px rgba(0,43,127,0.10);
+      }}
+      .sugcard .ico {{ font-size: 1.4rem; }}
+
+      /* Chips */
       .party-chip {{
-        display: inline-block;
-        padding: 2px 10px;
-        border-radius: 999px;
-        color: white;
-        font-size: 0.78rem;
-        font-weight: 600;
-        letter-spacing: 0.02em;
-        margin-left: 6px;
-        vertical-align: middle;
+        display: inline-block; padding: 2px 10px; border-radius: 999px;
+        color: white; font-size: 0.78rem; font-weight: 600;
+        letter-spacing: 0.02em; margin-left: 6px; vertical-align: middle;
+      }}
+
+      /* Avatar */
+      .avatar {{
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 36px; height: 36px; border-radius: 999px;
+        color: white; font-weight: 700; font-size: 0.85rem;
+        margin-right: 10px; vertical-align: middle;
+        flex-shrink: 0;
       }}
 
       /* Card de intervención */
@@ -147,48 +178,31 @@ st.markdown(
         margin-bottom: 12px;
         box-shadow: 0 1px 2px rgba(0,0,0,0.04);
       }}
-      .interv-card .meta {{
-        font-size: 0.85rem;
-        color: #5b6b7a;
-        margin-bottom: 6px;
+      .interv-card .head {{
+        display: flex; align-items: center; margin-bottom: 8px;
       }}
       .interv-card .who {{
-        font-weight: 700;
-        color: {CR_BLUE};
+        font-weight: 700; color: {CR_BLUE};
         font-size: 1.02rem;
       }}
+      .interv-card .meta {{
+        font-size: 0.82rem; color: #5b6b7a;
+      }}
       .interv-card .text {{
-        margin: 6px 0 10px;
-        line-height: 1.5;
-        color: #1f2937;
+        margin: 4px 0 10px; line-height: 1.55; color: #1f2937;
       }}
       .interv-card .links a {{
-        font-size: 0.85rem;
-        margin-right: 14px;
-        text-decoration: none;
-        color: {CR_BLUE};
-        font-weight: 600;
+        font-size: 0.85rem; margin-right: 14px;
+        text-decoration: none; color: {CR_BLUE}; font-weight: 600;
       }}
       .interv-card .links a:hover {{ color: {CR_RED}; }}
 
-      /* Suggestion chips */
-      .stButton > button[kind="secondary"] {{
-        border-radius: 999px;
-        font-size: 0.85rem;
-        padding: 4px 14px;
-      }}
-
-      /* Citation pill dentro de respuesta del agente */
+      /* Citation pill */
       .cite {{
-        display: inline-block;
-        background: {CR_BLUE};
-        color: white;
-        padding: 0 6px;
-        border-radius: 999px;
-        font-size: 0.72rem;
-        font-weight: 600;
-        margin: 0 1px;
-        vertical-align: super;
+        display: inline-block; background: {CR_BLUE};
+        color: white; padding: 0 6px; border-radius: 999px;
+        font-size: 0.72rem; font-weight: 600;
+        margin: 0 1px; vertical-align: super;
       }}
 
       /* Sidebar branding */
@@ -196,8 +210,38 @@ st.markdown(
         background: #F8FAFC;
         border-right: 1px solid #E5E7EB;
       }}
-      [data-testid="stSidebar"] h2 {{
-        font-size: 1.1rem;
+      [data-testid="stSidebar"] h2 {{ font-size: 1.1rem; }}
+
+      /* Floating agent — el contenedor que envuelve todo es el de
+         streamlit-float; le damos look de panel/burbuja según estado. */
+      .agent-panel {{
+        background: white;
+        border-radius: 18px;
+        padding: 14px 16px;
+        border-top: 4px solid {CR_BLUE};
+        box-shadow: 0 18px 50px rgba(0,0,0,0.22);
+      }}
+      .agent-panel .head {{
+        display: flex; justify-content: space-between;
+        align-items: center; padding-bottom: 8px;
+        border-bottom: 1px solid #eef0f3; margin-bottom: 8px;
+      }}
+      .agent-panel .head .title {{
+        color: {CR_BLUE}; font-weight: 700;
+        font-family: 'Source Serif Pro', Georgia, serif;
+      }}
+      .agent-bubble button {{
+        background: linear-gradient(135deg, {CR_BLUE} 0%, {CR_RED} 140%) !important;
+        color: white !important;
+        border: none !important;
+        border-radius: 999px !important;
+        padding: 12px 18px !important;
+        font-weight: 700 !important;
+        box-shadow: 0 10px 26px rgba(0,43,127,0.32) !important;
+      }}
+      .agent-bubble button:hover {{
+        transform: translateY(-1px);
+        box-shadow: 0 12px 30px rgba(0,43,127,0.45) !important;
       }}
     </style>
     """,
@@ -230,11 +274,8 @@ def get_llm():
 
 @st.cache_resource(show_spinner=False)
 def get_spark():
-    """SQL warehouse connection. Devuelve None si no está configurado."""
     host = os.environ.get("DATABRICKS_HOST")
     http_path = os.environ.get("DATABRICKS_HTTP_PATH")
-    # En Databricks Apps `valueFrom` sobre un sql_warehouse expone el ID,
-    # no el http_path. Lo derivamos.
     if not http_path:
         warehouse_id = os.environ.get("DATABRICKS_WAREHOUSE_ID")
         if warehouse_id:
@@ -253,7 +294,6 @@ def get_spark():
 
 
 def sql_df(query: str) -> pd.DataFrame | None:
-    """Corre una query contra el warehouse; None si no hay conexión o falla."""
     conn = get_spark()
     if conn is None:
         return None
@@ -264,7 +304,7 @@ def sql_df(query: str) -> pd.DataFrame | None:
 
 
 # ---------------------------------------------------------------------------
-# Helpers de búsqueda y render
+# Búsqueda y renders
 # ---------------------------------------------------------------------------
 
 def buscar(query: str, k: int = 10, filtros: dict | None = None) -> list[dict]:
@@ -288,8 +328,8 @@ def buscar(query: str, k: int = 10, filtros: dict | None = None) -> list[dict]:
     return [dict(zip(cols, row)) for row in res["result"]["data_array"]]
 
 
-def render_intervencion_card(item: dict, cite_n: int | None = None):
-    """Renderiza una intervención como card con badge de fracción."""
+def render_intervencion_card(item: dict, cite_n: int | None = None, compact: bool = False):
+    avatar = avatar_html(item.get("diputado"), item.get("fraccion"))
     badge = party_badge_html(item.get("fraccion"))
     cite = f'<span class="cite">{cite_n}</span> ' if cite_n is not None else ""
     diputado = escape(str(item.get("diputado") or "Sin identificar"))
@@ -297,15 +337,16 @@ def render_intervencion_card(item: dict, cite_n: int | None = None):
     session_id = escape(str(item.get("session_id") or ""))
     fuente = escape(str(item.get("fuente") or "?"))
     texto = escape(str(item.get("texto") or ""))
+    if compact and len(texto) > 220:
+        texto = texto[:220] + "…"
 
     links = []
     if item.get("video_url") and item.get("start_sec") is not None:
         try:
             secs = int(item["start_sec"])
-            mins = secs // 60
             links.append(
                 f'<a href="{item["video_url"]}&t={secs}" target="_blank">'
-                f"▶ Video · min {mins}</a>"
+                f"▶ Video · min {secs // 60}</a>"
             )
         except (TypeError, ValueError):
             pass
@@ -320,8 +361,13 @@ def render_intervencion_card(item: dict, cite_n: int | None = None):
     st.markdown(
         f"""
         <div class="interv-card">
-          <div class="meta">{cite}{fecha} · sesión <code>{session_id}</code></div>
-          <div class="who">{diputado}{badge}</div>
+          <div class="head">
+            {avatar}
+            <div>
+              <div class="who">{cite}{diputado}{badge}</div>
+              <div class="meta">{fecha} · sesión <code>{session_id}</code></div>
+            </div>
+          </div>
           <div class="text">{texto}</div>
           {links_html}
         </div>
@@ -331,56 +377,8 @@ def render_intervencion_card(item: dict, cite_n: int | None = None):
 
 
 # ---------------------------------------------------------------------------
-# Hero
+# Agente — pipeline
 # ---------------------------------------------------------------------------
-
-def render_hero():
-    st.markdown(
-        """
-        <div class="hero">
-          <h1>🏛️ Hansard CR</h1>
-          <div class="tag">El Plenario de la Asamblea Legislativa de Costa Rica,
-          buscable y conversable. Cada respuesta cita su fuente.</div>
-          <div class="flag-bar">
-            <div style="background:#002B7F"></div>
-            <div style="background:white"></div>
-            <div style="background:#CE1126"></div>
-            <div style="background:white"></div>
-            <div style="background:#002B7F"></div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # Métricas (silenciosas si no hay warehouse)
-    metrics = sql_df(
-        f"""
-        SELECT
-          (SELECT COUNT(DISTINCT session_id) FROM {SILVER_INTERVENCIONES}) AS sesiones,
-          (SELECT COUNT(*) FROM {SILVER_INTERVENCIONES}) AS intervenciones,
-          (SELECT COUNT(DISTINCT diputado) FROM {SILVER_INTERVENCIONES}
-              WHERE diputado IS NOT NULL) AS diputados
-        """
-    )
-    if metrics is not None and not metrics.empty:
-        c1, c2, c3 = st.columns(3)
-        c1.metric("📅 Sesiones", int(metrics.iloc[0]["sesiones"] or 0))
-        c2.metric("💬 Intervenciones", f"{int(metrics.iloc[0]['intervenciones'] or 0):,}")
-        c3.metric("👥 Diputados", int(metrics.iloc[0]["diputados"] or 0))
-
-
-# ---------------------------------------------------------------------------
-# Página: Agente (landing)
-# ---------------------------------------------------------------------------
-
-SUGERENCIAS = [
-    "¿Qué se dijo sobre la CCSS esta semana?",
-    "Comparame las posturas sobre seguridad ciudadana",
-    "Resumime las últimas discusiones sobre la jornada 4x3",
-    "¿Qué propone Frente Amplio en educación?",
-]
-
 
 def _reescribir_query(historial: list[dict], pregunta: str) -> str:
     if not historial:
@@ -401,11 +399,9 @@ def _reescribir_query(historial: list[dict], pregunta: str) -> str:
         resp = get_llm().chat.completions.create(
             model=LLM_ENDPOINT,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=120,
-            temperature=0.0,
+            max_tokens=120, temperature=0.0,
         )
-        rewritten = resp.choices[0].message.content.strip().strip('"')
-        return rewritten or pregunta
+        return resp.choices[0].message.content.strip().strip('"') or pregunta
     except Exception:
         return pregunta
 
@@ -444,99 +440,256 @@ def _construir_prompt_agente(
     return mensajes
 
 
-def page_agente():
-    st.markdown("## 💬 Agente del Plenario")
-    st.caption(
-        "Chat multi-turno con citas obligatorias. Cada respuesta se "
-        "construye desde texto real recuperado del Plenario."
+def run_agent_turn(user_input: str):
+    """Ejecuta una vuelta del agente: rewrite → retrieve → generate."""
+    st.session_state.agent_messages.append(
+        {"role": "user", "content": user_input}
+    )
+    historial = st.session_state.agent_messages[:-1]
+    query = _reescribir_query(historial, user_input)
+    contexto = buscar(query, k=8)
+
+    if not contexto:
+        respuesta = (
+            "No encontré nada en el Plenario que responda a esa "
+            "pregunta. Probá reformularla o buscar por un tema más "
+            "específico (CCSS, jornada 4x3, seguridad, etc.)."
+        )
+        st.session_state.agent_messages.append(
+            {"role": "assistant", "content": respuesta, "sources": []}
+        )
+        return
+
+    mensajes = _construir_prompt_agente(historial, user_input, contexto)
+    try:
+        resp = get_llm().chat.completions.create(
+            model=LLM_ENDPOINT, messages=mensajes,
+            max_tokens=900, temperature=0.2,
+        )
+        respuesta = resp.choices[0].message.content
+    except Exception as e:
+        respuesta = f"⚠️ No pude generar respuesta: {e}"
+
+    st.session_state.agent_messages.append(
+        {"role": "assistant", "content": respuesta, "sources": contexto}
     )
 
+
+# ---------------------------------------------------------------------------
+# Floating agent widget
+# ---------------------------------------------------------------------------
+
+def render_floating_agent():
+    """Render the agent as a floating panel at bottom-left.
+
+    Collapsed: a single 'Preguntar al Agente' pill button.
+    Expanded:  a chat panel with history + input.
+    """
     if "agent_messages" not in st.session_state:
         st.session_state.agent_messages = []
-    if "pending_input" not in st.session_state:
-        st.session_state.pending_input = None
+    if "chat_open" not in st.session_state:
+        st.session_state.chat_open = False
 
-    # Sugerencias en chips
-    if not st.session_state.agent_messages:
-        st.markdown("**Probá una de estas preguntas:**")
-        chip_cols = st.columns(len(SUGERENCIAS))
-        for col, sug in zip(chip_cols, SUGERENCIAS):
-            if col.button(sug, key=f"chip_{sug}", use_container_width=True):
-                st.session_state.pending_input = sug
+    chat_open = st.session_state.chat_open
+    container = st.container()
+
+    if not chat_open:
+        with container:
+            st.markdown('<div class="agent-bubble">', unsafe_allow_html=True)
+            if st.button("💬 Preguntar al Agente",
+                         key="open_agent", use_container_width=True):
+                st.session_state.chat_open = True
                 st.rerun()
-
-    # Render del histórico
-    for msg in st.session_state.agent_messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-            if msg.get("sources"):
-                with st.expander(f"📚 Fuentes ({len(msg['sources'])})"):
-                    for i, c in enumerate(msg["sources"]):
-                        render_intervencion_card(c, cite_n=i + 1)
-
-    # Input — manejo de chip o chat_input
-    user_input = st.chat_input("Preguntale al Plenario...")
-    if st.session_state.pending_input and not user_input:
-        user_input = st.session_state.pending_input
-        st.session_state.pending_input = None
-
-    if user_input:
-        st.session_state.agent_messages.append(
-            {"role": "user", "content": user_input}
+            st.markdown("</div>", unsafe_allow_html=True)
+        container.float(
+            "bottom: 22px; left: 22px; width: 220px; z-index: 9999;"
         )
-        with st.chat_message("user"):
-            st.markdown(user_input)
+        return
 
-        with st.chat_message("assistant"):
-            historial_previo = st.session_state.agent_messages[:-1]
+    with container:
+        st.markdown('<div class="agent-panel">', unsafe_allow_html=True)
 
-            with st.spinner("Reformulando la consulta..."):
-                query = _reescribir_query(historial_previo, user_input)
-            if query != user_input:
-                st.caption(f"🔍 Buscando: *{query}*")
+        # Header
+        head_col1, head_col2, head_col3 = st.columns([5, 1, 1])
+        head_col1.markdown(
+            f'<div class="title">💬 Agente del Plenario</div>',
+            unsafe_allow_html=True,
+        )
+        if head_col2.button("🧹", key="clear_agent",
+                            help="Limpiar conversación"):
+            st.session_state.agent_messages = []
+            st.rerun()
+        if head_col3.button("✕", key="close_agent", help="Cerrar"):
+            st.session_state.chat_open = False
+            st.rerun()
 
-            with st.spinner("Buscando en el Plenario..."):
-                contexto = buscar(query, k=8)
+        # Empty state
+        if not st.session_state.agent_messages:
+            st.caption(
+                "Preguntá lo que se ha dicho en el Plenario. Las respuestas "
+                "siempre citan su fuente."
+            )
 
-            if not contexto:
-                respuesta = (
-                    "No encontré nada en el Plenario que responda a esa "
-                    "pregunta. Probá reformularla o buscar por un tema más "
-                    "específico (CCSS, jornada 4x3, seguridad, etc.)."
-                )
-                st.markdown(respuesta)
-                st.session_state.agent_messages.append(
-                    {"role": "assistant", "content": respuesta, "sources": []}
-                )
-            else:
-                mensajes = _construir_prompt_agente(
-                    historial_previo, user_input, contexto
-                )
-                with st.spinner("Pensando..."):
-                    resp = get_llm().chat.completions.create(
-                        model=LLM_ENDPOINT,
-                        messages=mensajes,
-                        max_tokens=900,
-                        temperature=0.2,
-                    )
-                respuesta = resp.choices[0].message.content
-                st.markdown(respuesta)
-                with st.expander(f"📚 Fuentes ({len(contexto)})"):
-                    for i, c in enumerate(contexto):
-                        render_intervencion_card(c, cite_n=i + 1)
+        # Pending input (from sugerencia chip elsewhere)
+        pending = st.session_state.pop("pending_input", None)
 
-                st.session_state.agent_messages.append(
-                    {
-                        "role": "assistant",
-                        "content": respuesta,
-                        "sources": contexto,
-                    }
-                )
+        # History (scrollable)
+        history = st.container(height=320)
+        with history:
+            for msg in st.session_state.agent_messages:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+                    if msg.get("sources"):
+                        with st.expander(f"📚 {len(msg['sources'])} fuentes"):
+                            for i, c in enumerate(msg["sources"]):
+                                render_intervencion_card(
+                                    c, cite_n=i + 1, compact=True
+                                )
+
+        # Input form
+        with st.form("agent_form", clear_on_submit=True):
+            user_input = st.text_input(
+                "Pregunta",
+                placeholder="Preguntale al Plenario...",
+                label_visibility="collapsed",
+            )
+            submitted = st.form_submit_button("Enviar →", use_container_width=True)
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        text = pending or (user_input if submitted else None)
+        if text:
+            with st.spinner("Pensando..."):
+                run_agent_turn(text)
+            st.rerun()
+
+    container.float(
+        "bottom: 22px; left: 22px; width: 440px; z-index: 9999;"
+    )
 
 
 # ---------------------------------------------------------------------------
-# Página: Buscar
+# Hero
 # ---------------------------------------------------------------------------
+
+def render_hero():
+    st.markdown(
+        """
+        <div class="hero">
+          <h1>🏛️ Hansard CR</h1>
+          <div class="tag">El Plenario de la Asamblea Legislativa de Costa
+          Rica, buscable y conversable. Cada respuesta cita su fuente.</div>
+          <div class="flag-bar">
+            <div style="background:#002B7F"></div>
+            <div style="background:white"></div>
+            <div style="background:#CE1126"></div>
+            <div style="background:white"></div>
+            <div style="background:#002B7F"></div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_metrics():
+    metrics = sql_df(
+        f"""
+        SELECT
+          (SELECT COUNT(DISTINCT session_id) FROM {SILVER_INTERVENCIONES}) AS sesiones,
+          (SELECT COUNT(*) FROM {SILVER_INTERVENCIONES}) AS intervenciones,
+          (SELECT COUNT(DISTINCT diputado) FROM {SILVER_INTERVENCIONES}
+              WHERE diputado IS NOT NULL) AS diputados
+        """
+    )
+    if metrics is None or metrics.empty:
+        return
+    c1, c2, c3 = st.columns(3)
+    c1.metric("📅 Sesiones", int(metrics.iloc[0]["sesiones"] or 0))
+    c2.metric("💬 Intervenciones",
+              f"{int(metrics.iloc[0]['intervenciones'] or 0):,}")
+    c3.metric("👥 Diputados", int(metrics.iloc[0]["diputados"] or 0))
+
+
+# ---------------------------------------------------------------------------
+# Pages
+# ---------------------------------------------------------------------------
+
+SUGERENCIAS = [
+    ("🏥", "CCSS",
+     "¿Qué se ha dicho sobre la situación de la CCSS?"),
+    ("🛡️", "Seguridad",
+     "Comparame las posturas de las fracciones sobre seguridad ciudadana"),
+    ("⏱️", "Jornada 4x3",
+     "Resumime las últimas discusiones sobre la jornada laboral 4x3"),
+    ("📚", "Educación",
+     "¿Qué propuestas hay sobre presupuesto en educación?"),
+]
+
+
+def _open_chat_with(query: str):
+    st.session_state.chat_open = True
+    st.session_state.pending_input = query
+    st.rerun()
+
+
+def page_inicio():
+    render_metrics()
+    st.markdown("## 💡 Probá una pregunta")
+    st.caption(
+        "Tocá una tarjeta para abrir el agente con la pregunta lista. "
+        "El agente busca en el Plenario y responde con citas."
+    )
+
+    cols = st.columns(len(SUGERENCIAS))
+    for col, (ico, titulo, pregunta) in zip(cols, SUGERENCIAS):
+        with col:
+            st.markdown(
+                f"""
+                <div class="sugcard">
+                  <div class="ico">{ico}</div>
+                  <div style="font-weight:700; margin:6px 0 4px;">{escape(titulo)}</div>
+                  <div style="color:#5b6b7a; font-size:0.88rem;">{escape(pregunta)}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if st.button("Preguntar", key=f"sug_{titulo}", use_container_width=True):
+                _open_chat_with(pregunta)
+
+    # Sesiones recientes
+    st.markdown("## 🗓️ Sesiones recientes")
+    recientes = sql_df(
+        f"""
+        SELECT session_id, fecha, COUNT(*) AS intervenciones,
+               ANY_VALUE(video_url) AS video_url, ANY_VALUE(fuente) AS fuente
+        FROM {SILVER_INTERVENCIONES}
+        GROUP BY session_id, fecha
+        ORDER BY fecha DESC LIMIT 5
+        """
+    )
+    if recientes is None or recientes.empty:
+        st.info(
+            "Sin sesiones cargadas todavía. Corré "
+            "`databricks bundle run vector_search_bootstrap` para sembrar "
+            "datos placeholder."
+        )
+        return
+
+    for _, s in recientes.iterrows():
+        c1, c2, c3 = st.columns([2, 1, 1])
+        c1.markdown(
+            f"**{s['fecha']}** · sesión `{s['session_id']}`  \n"
+            f"<span style='color:#5b6b7a'>fuente: {s['fuente']} · "
+            f"{int(s['intervenciones'])} intervenciones</span>",
+            unsafe_allow_html=True,
+        )
+        if s["video_url"]:
+            c2.link_button("▶ Video", s["video_url"], use_container_width=True)
+        if c3.button("Resumir 🤖", key=f"res_{s['session_id']}",
+                     use_container_width=True):
+            _open_chat_with(f"Resumime la sesión {s['session_id']}")
+
 
 def page_buscar():
     st.markdown("## 🔎 Buscador semántico")
@@ -547,11 +700,10 @@ def page_buscar():
         placeholder="ej. jornada 4x3, CCSS, seguridad ciudadana...",
         label_visibility="collapsed",
     )
-    c1, c2, c3 = st.columns([2, 1, 1])
+    c1, c2 = st.columns([3, 1])
     with c2:
         solo_video = st.checkbox("Solo videos", value=False)
-    with c3:
-        k = st.slider("Resultados", 5, 25, 10, label_visibility="collapsed")
+    k = c1.slider("Resultados", 5, 25, 10, label_visibility="collapsed")
 
     if q:
         filtros = {"fuente": "video"} if solo_video else None
@@ -565,10 +717,6 @@ def page_buscar():
                 render_intervencion_card(r)
 
 
-# ---------------------------------------------------------------------------
-# Página: Sesión
-# ---------------------------------------------------------------------------
-
 def page_sesion():
     st.markdown("## 📺 Explorar una sesión")
     sesiones = sql_df(
@@ -580,14 +728,13 @@ def page_sesion():
     )
     if sesiones is None or sesiones.empty:
         st.warning(
-            "No hay sesiones cargadas todavía. Corré `daily_pipeline` para "
-            "poblar la tabla."
+            "No hay sesiones cargadas todavía. Corré `daily_pipeline` o "
+            "`vector_search_bootstrap` para poblar la tabla."
         )
         return
 
     sel = st.selectbox(
-        "Sesión",
-        options=sesiones["session_id"].tolist(),
+        "Sesión", options=sesiones["session_id"].tolist(),
         format_func=lambda s: (
             f"{s} — {sesiones[sesiones.session_id == s].iloc[0]['fecha']}"
         ),
@@ -601,33 +748,13 @@ def page_sesion():
         else:
             st.info("Sin video para esta sesión (solo acta).")
     with col_t:
-        st.markdown("### Resumen express")
+        st.markdown("### Acciones")
         if st.button("🤖 Resumir esta sesión", use_container_width=True):
-            contenido = sql_df(
-                f"""
-                SELECT diputado, texto FROM {SILVER_INTERVENCIONES}
-                WHERE session_id = '{sel}' LIMIT 30
-                """
+            _open_chat_with(f"Resumime la sesión {sel}")
+        if st.button("💬 Preguntar sobre esta sesión", use_container_width=True):
+            _open_chat_with(
+                f"¿Qué se discutió en la sesión {sel} del {row['fecha']}?"
             )
-            if contenido is None or contenido.empty:
-                st.warning("No hay intervenciones cargadas para esta sesión.")
-            else:
-                prompt = (
-                    "Resumí esta sesión del Plenario en 5 bullets. Cada bullet "
-                    "con el nombre del diputado entre paréntesis cuando "
-                    "aplique. Sé conciso.\n\n"
-                    + "\n".join(
-                        f"- {r['diputado']}: {r['texto'][:300]}"
-                        for _, r in contenido.iterrows()
-                    )
-                )
-                with st.spinner("Resumiendo..."):
-                    resp = get_llm().chat.completions.create(
-                        model=LLM_ENDPOINT,
-                        messages=[{"role": "user", "content": prompt}],
-                        max_tokens=600,
-                    )
-                st.write(resp.choices[0].message.content)
 
     st.markdown("### Intervenciones")
     intervenciones = sql_df(
@@ -644,10 +771,6 @@ def page_sesion():
         for _, i in intervenciones.iterrows():
             render_intervencion_card(i.to_dict())
 
-
-# ---------------------------------------------------------------------------
-# Página: Diputado
-# ---------------------------------------------------------------------------
 
 def page_diputado():
     st.markdown("## 👤 Perfil de diputado")
@@ -677,6 +800,10 @@ def page_diputado():
         unsafe_allow_html=True,
     )
 
+    if st.button(f"💬 Preguntar al agente sobre {dip_sel}",
+                 use_container_width=False):
+        _open_chat_with(f"¿Cuáles son las posturas de {dip_sel}?")
+
     st.markdown("#### Top 15 más activos")
     st.bar_chart(diputados.head(15).set_index("diputado")["intervenciones"])
 
@@ -700,7 +827,7 @@ def page_diputado():
 # ---------------------------------------------------------------------------
 
 PAGES = {
-    "💬 Agente": page_agente,
+    "🏠 Inicio": page_inicio,
     "🔎 Buscar": page_buscar,
     "📺 Sesión": page_sesion,
     "👤 Diputado": page_diputado,
@@ -721,12 +848,13 @@ with st.sidebar:
         """,
         unsafe_allow_html=True,
     )
-    page = st.radio("Navegación", list(PAGES.keys()), label_visibility="collapsed")
+    page = st.radio(
+        "Navegación", list(PAGES.keys()), label_visibility="collapsed"
+    )
 
     st.divider()
-    if page == "💬 Agente" and st.button("🧹 Limpiar chat", use_container_width=True):
-        st.session_state.agent_messages = []
-        st.rerun()
+    st.caption("**El agente vive en la esquina inferior izquierda 💬**")
+    st.caption("Está disponible en cualquier página.")
 
     st.divider()
     st.caption("**Fuentes**")
@@ -742,3 +870,6 @@ with st.sidebar:
 
 render_hero()
 PAGES[page]()
+
+# Floating agent — siempre al final para que quede on top
+render_floating_agent()
