@@ -27,7 +27,7 @@ resources:
       tasks:
         - task_key: "pull_audio"
           notebook_task:
-            notebook_path: "../../notebooks/02_pull_youtube_audio"
+            notebook_path: "../../notebooks/02_pull_youtube_audio.py"
             base_parameters:
               catalog: "{{job.parameters.catalog}}"
               schema: "{{job.parameters.schema}}"

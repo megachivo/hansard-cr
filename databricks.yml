@@ -45,11 +45,11 @@ resources:
       tasks:
         - task_key: "scrape_actas"
           notebook_task:
-            notebook_path: "./notebooks/01_scrape_actas"
+            notebook_path: "./notebooks/01_scrape_actas.py"
 
         - task_key: "pull_youtube_audio"
           notebook_task:
-            notebook_path: "./notebooks/02_pull_youtube_audio"
+            notebook_path: "./notebooks/02_pull_youtube_audio.py"
             base_parameters:
               catalog: ${var.catalog}
               schema: "bronze"
@@ -61,13 +61,13 @@ resources:
 
         - task_key: "transcribe_youtube"
           notebook_task:
-            notebook_path: "./notebooks/02_transcribe_youtube"
+            notebook_path: "./notebooks/02_transcribe_youtube.py"
           depends_on:
             - task_key: "pull_youtube_audio"
 
         - task_key: "unify_and_embed"
           notebook_task:
-            notebook_path: "./notebooks/03_unify_and_embed"
+            notebook_path: "./notebooks/03_unify_and_embed.py"
           depends_on:
             - task_key: "transcribe_youtube"
             - task_key: "scrape_actas"
