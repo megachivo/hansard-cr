@@ -1,0 +1,30 @@
+# Job dedicado: desplegar el modelo `system.ai.whisper_large_v3` v3 como
+# Model Serving endpoint con scale-to-zero. Una vez. Tarda 15-20 min.
+#
+# Sustituye al notebook 04_register_whisper.py (que registraba un pyfunc
+# custom). Acá usamos el modelo de Marketplace directamente.
+
+resources:
+  jobs:
+    deploy_whisper_endpoint:
+      name: "Hansard CR — Deploy Whisper Endpoint"
+      description: "Despliega system.ai.whisper_large_v3 v3 como hansard-whisper"
+
+      parameters:
+        - name: endpoint_name
+          default: "hansard-whisper"
+        - name: model_full_name
+          default: "system.ai.whisper_large_v3"
+        - name: model_version
+          default: "3"
+
+      tasks:
+        - task_key: "deploy_endpoint"
+          notebook_task:
+            notebook_path: "../../notebooks/02c_deploy_whisper_endpoint.py"
+            base_parameters:
+              endpoint_name: "{{job.parameters.endpoint_name}}"
+              model_full_name: "{{job.parameters.model_full_name}}"
+              model_version: "{{job.parameters.model_version}}"
+
+      max_concurrent_runs: 1

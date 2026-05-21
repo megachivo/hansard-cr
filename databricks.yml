@@ -66,6 +66,13 @@ resources:
         - task_key: "transcribe_youtube"
           notebook_task:
             notebook_path: "./notebooks/02_transcribe_youtube.py"
+            base_parameters:
+              catalog: ${var.catalog}
+              schema_bronze: ${resources.schemas.bronze.name}
+              schema_silver: ${resources.schemas.silver.name}
+              endpoint_name: "hansard-whisper"
+              chunk_seg: "30"
+              ventana_intervencion_seg: "180"
           depends_on:
             - task_key: "pull_youtube_audio"
 
