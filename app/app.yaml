@@ -1,0 +1,25 @@
+# Databricks App configuration
+# Docs: https://docs.databricks.com/dev-tools/databricks-apps/app-development
+
+command: ["streamlit", "run", "app.py", "--server.port", "8000", "--server.address", "0.0.0.0"]
+
+env:
+  - name: VECTOR_SEARCH_ENDPOINT
+    value: "hansard-cr-endpoint"
+  - name: VECTOR_INDEX_NAME
+    value: "hansard_cr.gold.intervenciones_idx"
+  - name: LLM_ENDPOINT
+    value: "databricks-meta-llama-3-3-70b-instruct"
+    # Cambiar a databricks-claude-sonnet-4 si está disponible en tu región
+  - name: CATALOG
+    value: "hansard_cr"
+  - name: DATABRICKS_HTTP_PATH
+    valueFrom: "sql_warehouse_http_path"  # configurar el resource abajo
+  - name: STREAMLIT_BROWSER_GATHER_USAGE_STATS
+    value: "false"
+
+# Recursos que el App puede usar (configurar en la UI de Databricks Apps)
+# - Vector Search endpoint: hansard-cr-endpoint (READ)
+# - Model Serving endpoint: databricks-meta-llama-3-3-70b-instruct (CAN_QUERY)
+# - SQL Warehouse: (CAN_USE) — para queries SQL desde el app
+# - Unity Catalog: hansard_cr (CAN_READ)

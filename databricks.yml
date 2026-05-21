@@ -1,0 +1,87 @@
+# Databricks Asset Bundle — Hansard CR
+# Despliega: catálogo + notebooks + job + app en un solo comando
+# Docs: https://docs.databricks.com/dev-tools/bundles/
+
+bundle:
+  name: hansard-cr
+
+variables:
+  catalog:
+    description: "Unity Catalog para todos los datos"
+    default: "hansard_cr"
+  warehouse_id:
+    description: "SQL Warehouse ID para queries del app"
+    default: ""  # llenar con tu warehouse
+
+resources:
+  jobs:
+    daily_pipeline:
+      name: "Hansard CR — Daily Pipeline"
+      tasks:
+        - task_key: "scrape_actas"
+          notebook_task:
+            notebook_path: "../notebooks/01_scrape_actas"
+          job_cluster_key: "small_cluster"
+
+        - task_key: "transcribe_youtube"
+          notebook_task:
+            notebook_path: "../notebooks/02_transcribe_youtube"
+          job_cluster_key: "gpu_cluster"
+          depends_on:
+            - task_key: "scrape_actas"
+
+        - task_key: "unify_and_embed"
+          notebook_task:
+            notebook_path: "../notebooks/03_unify_and_embed"
+          job_cluster_key: "small_cluster"
+          depends_on:
+            - task_key: "transcribe_youtube"
+
+      job_clusters:
+        - job_cluster_key: "small_cluster"
+          new_cluster:
+            spark_version: "15.4.x-scala2.12"
+            node_type_id: "i3.xlarge"  # ajustar a tu cloud
+            num_workers: 0
+            data_security_mode: "SINGLE_USER"
+
+        - job_cluster_key: "gpu_cluster"
+          new_cluster:
+            spark_version: "15.4.x-gpu-ml-scala2.12"
+            node_type_id: "g4dn.xlarge"  # T4 GPU, ajustar a tu cloud
+            num_workers: 0
+            data_security_mode: "SINGLE_USER"
+
+      schedule:
+        quartz_cron_expression: "0 0 7 * * ?"  # 7am todos los días
+        timezone_id: "America/Costa_Rica"
+
+  apps:
+    hansard_cr_app:
+      name: "hansard-cr-app"
+      description: "Buscador del Plenario de la Asamblea Legislativa CR"
+      source_code_path: "../app"
+      resources:
+        - name: "vector-search"
+          vector_search_endpoint:
+            name: "hansard-cr-endpoint"
+            permission: "CAN_USE"
+        - name: "llm"
+          serving_endpoint:
+            name: "databricks-meta-llama-3-3-70b-instruct"
+            permission: "CAN_QUERY"
+        - name: "sql-warehouse"
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: "CAN_USE"
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://your-workspace.cloud.databricks.com  # editar
+  prod:
+    mode: production
+    workspace:
+      host: https://your-workspace.cloud.databricks.com

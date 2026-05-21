@@ -1,0 +1,6 @@
+streamlit>=1.31.0
+databricks-sdk>=0.20.0
+databricks-vectorsearch>=0.40
+databricks-sql-connector>=3.0.0
+openai>=1.30.0
+pandas>=2.0.0
