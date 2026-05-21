@@ -1,25 +1,49 @@
 # Databricks App configuration
 # Docs: https://docs.databricks.com/dev-tools/databricks-apps/app-development
+#
+# IMPORTANTE: este archivo se sube tal cual al App. No interpola variables del
+# bundle (a diferencia de databricks.yml). Por eso `VECTOR_INDEX_NAME` y
+# `CATALOG` deben reflejar los nombres REALES del workspace donde se despliega.
+#
+# En `mode: development`, el bundle prefija los schemas con
+# `dev_<usuario>_`, así que el índice queda en
+# `<catalog>.dev_<usuario>_gold.intervenciones_idx`.
+# Para producción, remové el prefijo.
 
 command: ["streamlit", "run", "app.py", "--server.port", "8000", "--server.address", "0.0.0.0"]
 
 env:
+  # ----- Vector Search ----------------------------------------------------
+  # Databricks Apps no expone Vector Search como resource binding tipado,
+  # así que pasamos el nombre del endpoint literal. La SP del App necesita
+  # CAN_USE sobre el endpoint (ver comentario en databricks.yml).
   - name: VECTOR_SEARCH_ENDPOINT
     value: "hansard-cr-endpoint"
   - name: VECTOR_INDEX_NAME
-    value: "hansard_cr.gold.intervenciones_idx"
-  - name: LLM_ENDPOINT
-    value: "databricks-meta-llama-3-3-70b-instruct"
-    # Cambiar a databricks-claude-sonnet-4 si está disponible en tu región
+    value: "josesraspoke.dev_jose_cisneros_gold.intervenciones_idx"
+
+  # ----- Catálogo para queries SQL del App --------------------------------
   - name: CATALOG
-    value: "hansard_cr"
+    value: "josesraspoke"
+  - name: SCHEMA_SILVER
+    value: "dev_jose_cisneros_silver"
+  - name: SCHEMA_GOLD
+    value: "dev_jose_cisneros_gold"
+
+  # ----- LLM serving endpoint --------------------------------------------
+  # Cambiar a `databricks-claude-sonnet-4` si está disponible en tu región.
+  - name: LLM_ENDPOINT
+    valueFrom: "llm"
+
+  # ----- SQL Warehouse (HTTP path se resuelve desde el resource) ---------
   - name: DATABRICKS_HTTP_PATH
-    valueFrom: "sql_warehouse_http_path"  # configurar el resource abajo
+    valueFrom: "sql-warehouse"
+
   - name: STREAMLIT_BROWSER_GATHER_USAGE_STATS
     value: "false"
 
-# Recursos que el App puede usar (configurar en la UI de Databricks Apps)
-# - Vector Search endpoint: hansard-cr-endpoint (READ)
-# - Model Serving endpoint: databricks-meta-llama-3-3-70b-instruct (CAN_QUERY)
-# - SQL Warehouse: (CAN_USE) — para queries SQL desde el app
-# - Unity Catalog: hansard_cr (CAN_READ)
+# Recursos requeridos (definidos en databricks.yml > resources.apps.hansard_cr_app):
+#   - vector-search  (vector_search_endpoint, CAN_USE)
+#   - llm            (serving_endpoint, CAN_QUERY)
+#   - sql-warehouse  (sql_warehouse, CAN_USE)
+# Unity Catalog `josesraspoke` debe tener CAN_READ para la service principal del App.

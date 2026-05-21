@@ -1,0 +1,41 @@
+# Job dedicado: levanta el Vector Search end-to-end con datos placeholder.
+# Útil para tener el App demoable antes de que termine el scraping de actas
+# o la transcripción de YouTube.
+#
+# Corré este job ANTES del primer `databricks bundle deploy` que incluya
+# `apps.hansard_cr_app.resources["vector-search"]`, porque ese resource
+# requiere que el endpoint ya exista.
+
+resources:
+  jobs:
+    vector_search_bootstrap:
+      name: "Hansard CR — Vector Search Bootstrap"
+      description: |
+        Crea (o reutiliza) el endpoint de Vector Search, crea el index
+        sobre `gold.intervenciones_unified` y siembra datos placeholder
+        si `silver.intervenciones` está vacío.
+
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema_silver
+          default: ${resources.schemas.silver.name}
+        - name: schema_gold
+          default: ${resources.schemas.gold.name}
+        - name: endpoint_name
+          default: ${var.vector_search_endpoint}
+        - name: embedding_endpoint
+          default: "databricks-gte-large-en"
+
+      tasks:
+        - task_key: "unify_and_embed"
+          notebook_task:
+            notebook_path: "../../notebooks/03_unify_and_embed.py"
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema_silver: "{{job.parameters.schema_silver}}"
+              schema_gold: "{{job.parameters.schema_gold}}"
+              endpoint_name: "{{job.parameters.endpoint_name}}"
+              embedding_endpoint: "{{job.parameters.embedding_endpoint}}"
+
+      max_concurrent_runs: 1
